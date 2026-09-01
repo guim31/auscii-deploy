@@ -2,22 +2,22 @@
 
 ## Stack
 
-| Couche | Choix | Pourquoi |
-|---|---|---|
-| App web | Next.js 15 (App Router), TypeScript strict | Full-stack en un projet, très bon support par Claude Code |
-| UI | Tailwind + shadcn/ui, textes en français | UX simple, composants accessibles |
-| Base de données | PostgreSQL + Prisma | Fiable, migrations, typage |
-| Jobs | pg-boss (file de jobs sur Postgres) + process `worker` | Déploiements longs, reprises, pas de Redis à opérer |
-| Temps réel | SSE (`/api/deployments/[id]/stream`) lisant `DeploymentLog` | Console de provisioning, simple et robuste |
-| Auth | better-auth (email + mot de passe, sessions en base) | Léger, sans SaaS |
-| SSH | `ssh2` | Exécution distante, transfert d'archives |
-| Git | `simple-git` + Octokit | Repo par site, promotion, tags |
-| Captures | Playwright (Chromium) sur le pilote | Vignettes du dashboard |
-| Email | Resend (adaptateur, Brevo possible) | Formulaires et notifications |
-| IA | SDK Anthropic | Rapport d'analyse du site à l'étape 3 |
-| Secrets | AES-256-GCM avec `APP_ENCRYPTION_KEY` | Clés API chiffrées en base |
-| Tests | Vitest (unitaires, contrats), Playwright (e2e en mode démo) | |
-| Exploitation | Docker Compose (app, worker, postgres) derrière Caddy | Un seul VPS pilote |
+| Couche          | Choix                                                                                  | Pourquoi                                                  |
+| --------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| App web         | Next.js 16 (App Router, Server Actions), TypeScript strict                             | Full-stack en un projet, très bon support par Claude Code |
+| UI              | Tailwind v4 + composants Radix (style shadcn, écrits dans le repo), textes en français | UX simple, composants accessibles                         |
+| Base de données | PostgreSQL 16 + Prisma 6                                                               | Fiable, migrations, typage                                |
+| Jobs            | pg-boss (file de jobs sur Postgres) + process `worker`                                 | Déploiements longs, reprises, pas de Redis à opérer       |
+| Temps réel      | SSE (`/api/deployments/[id]/stream`) lisant `DeploymentLog`                            | Console de provisioning, simple et robuste                |
+| Auth            | better-auth (email + mot de passe, sessions en base)                                   | Léger, sans SaaS                                          |
+| SSH             | `ssh2`                                                                                 | Exécution distante, transfert d'archives                  |
+| Git             | `simple-git` + Octokit                                                                 | Repo par site, promotion, tags                            |
+| Captures        | Playwright (Chromium) sur le pilote                                                    | Vignettes du dashboard                                    |
+| Email           | Resend (adaptateur, Brevo possible)                                                    | Formulaires et notifications                              |
+| IA              | SDK Anthropic                                                                          | Rapport d'analyse du site à l'étape 3                     |
+| Secrets         | AES-256-GCM avec `APP_ENCRYPTION_KEY`                                                  | Clés API chiffrées en base                                |
+| Tests           | Vitest (unitaires, contrats), Playwright (e2e en mode démo)                            |                                                           |
+| Exploitation    | Docker Compose (app, worker, postgres) derrière Caddy                                  | Un seul VPS pilote                                        |
 
 ## Vue d'ensemble
 
@@ -37,14 +37,14 @@ Le **pilote** héberge l'outil. Les **VPS sites** n'hébergent que Caddy, Docker
 
 Chaque intégration externe est une interface TypeScript avec deux implémentations : réelle et mock. Le mode démo bascule tout sur les mocks. C'est aussi ce qui permet de changer de registrar ou de cloud plus tard.
 
-| Interface | Méthodes | Implémentations |
-|---|---|---|
-| `DomainProvider` | `check(fqdn)`, `register(fqdn, contact)`, `getOrderStatus(id)`, `setRecords(fqdn, records[])` | `GandiProvider`, `MockDomainProvider` |
-| `CloudProvider` | `listOffers()`, `createServer(spec, cloudInit)`, `getServer(id)`, `deleteServer(id)` | `ScalewayProvider`, `MockCloudProvider` |
-| `GitProvider` | `createRepo(slug)`, `pushRelease(repo, files, branch)`, `promote(repo)`, `tag(repo, name)` | `GitHubProvider`, `MockGitProvider` |
-| `MailProvider` | `send(message)` | `ResendProvider`, `MockMailProvider` |
-| `AiProvider` | `analyzeSite(files)` | `AnthropicProvider`, `MockAiProvider` |
-| `ServerAgent` | `exec(cmd)`, `uploadArchive(tar, dest)`, `switchRelease(slug, ts)`, `writeCaddySite(slug, config)`, `reloadCaddy()` | `SshServerAgent`, `MockServerAgent` |
+| Interface        | Méthodes                                                                                                            | Implémentations                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `DomainProvider` | `check(fqdn)`, `register(fqdn, contact)`, `getOrderStatus(id)`, `setRecords(fqdn, records[])`                       | `GandiProvider`, `MockDomainProvider`   |
+| `CloudProvider`  | `listOffers()`, `createServer(spec, cloudInit)`, `getServer(id)`, `deleteServer(id)`                                | `ScalewayProvider`, `MockCloudProvider` |
+| `GitProvider`    | `createRepo(slug)`, `pushRelease(repo, files, branch)`, `promote(repo)`, `tag(repo, name)`                          | `GitHubProvider`, `MockGitProvider`     |
+| `MailProvider`   | `send(message)`                                                                                                     | `ResendProvider`, `MockMailProvider`    |
+| `AiProvider`     | `analyzeSite(files)`                                                                                                | `AnthropicProvider`, `MockAiProvider`   |
+| `ServerAgent`    | `exec(cmd)`, `uploadArchive(tar, dest)`, `switchRelease(slug, ts)`, `writeCaddySite(slug, config)`, `reloadCaddy()` | `SshServerAgent`, `MockServerAgent`     |
 
 Les mocks reproduisent les délais et les états intermédiaires (commande de domaine « en attente », serveur « en cours de démarrage ») pour que la démo soit fidèle au réel.
 
@@ -60,11 +60,12 @@ Le champ `Site.runtime` porte ce choix. Le reste de l'outil (wizard, dashboard, 
 ## Modèle de données (Prisma)
 
 - `User` (email, hash, role `admin|manager`), `Session`
-- `Server` : provider, providerId, name, ip, sshUser, status `ordering|bootstrapping|ready|error|retired`, maxSites, offer, zone, isDemo
-- `Site` : slug, clientName, domain, previewHost, serverId, runtime `static`, status `draft|provisioning|preview|live|error`, formsEmail, gitRepo, previewToken, isDemo
+- `Server` : provider, providerId, name, ip, sshUser, status `ordering|bootstrapping|ready|error|retired`, offer, zone, vcpus, monthlyPrice, metrics (JSON : load15, ramUsedPct, diskUsedPct, diskFreeBytes, sitesCount, collectedAt), isDemo
+- `AppSetting` : clé/valeur JSON (demoMode, techDomain, previewSubdomain, defaultOffer, defaultZone, gandiContact, capacity)
+- `Site` : slug, clientName, domain, previewHost, serverId, runtime `static`, status `draft|provisioning|ready|preview|live|error`, formsEmail, gitRepo, previewToken, stagingReleaseId, liveReleaseId, screenshotPath, isDemo
 - `Domain` : siteId, fqdn, registrar, orderId, orderStatus, price, expiresAt, dnsConfigured
 - `Release` : siteId, version, commitSha, gitTag, archiveHash, analysisReport (JSON), createdBy
-- `Deployment` : siteId, releaseId, environment `staging|production`, status `queued|running|succeeded|failed`, startedAt, finishedAt, rollbackOfId, triggeredBy
+- `Deployment` : siteId, releaseId, kind `provision|deploy|promote|rollback`, environment `staging|production`, status `queued|running|succeeded|failed`, steps (JSON : état de chaque étape, base de la reprise), startedAt, finishedAt, rollbackOfId, triggeredBy
 - `DeploymentLog` : deploymentId, ts, level, step, message
 - `FormSubmission` : siteId, payload (JSON), fromIp, emailedAt
 - `Integration` : provider, encryptedCredentials, updatedAt, lastTestAt
@@ -73,19 +74,20 @@ Le champ `Site.runtime` porte ce choix. Le reste de l'outil (wizard, dashboard, 
 
 ## Pipeline de déploiement
 
-Jobs pg-boss exécutés par le worker. Chaque job est idempotent, journalise dans `DeploymentLog` et peut être relancé depuis la console.
+Un job pg-boss exécute un pipeline entier (`site.provision`, `site.deploy`, `site.promote`, `site.rollback`). Le pipeline enregistre l'état de chaque étape dans `Deployment.steps` : une relance reprend à l'étape échouée, les étapes terminées ne sont jamais rejouées. Chaque étape journalise dans `DeploymentLog`, diffusé en temps réel par SSE.
 
-1. `server.ensureCapacity` : choisit un serveur `ready` avec de la place ; sinon `server.order` (Scaleway + cloud-init) puis `server.bootstrap` (attente SSH, vérification Caddy, marquage `ready`).
+1. `server` : choisit, par métriques, le serveur le plus rempli qui a encore de la place ; sinon commande un serveur (Scaleway + cloud-init) après confirmation d'un admin, attend l'IP, SSH et Caddy, puis le marque `ready`.
 2. `domain.register` (après confirmation explicite en UI) puis `domain.configureDns` : `A` apex, `A www`, `A <slug>.preview` vers le serveur.
 3. `git.createRepo` puis `git.importRelease` : contenu du zip poussé sur `staging`.
 4. `site.deploy(staging)` : archive envoyée par SSH, extraction dans `releases/<ts>`, bascule de `current`, écriture du bloc Caddy preview, reload.
 5. `site.promote` : fusion `staging` → `production`, tag `prod-<AAAAMMJJ-HHMM>`, puis `site.deploy(production)` sur le domaine, `ssl.check`, `screenshot.capture`.
 6. `site.rollback` : bascule de `current` vers la release précédente, instantané.
-7. Récurrents : `ssl.checkAll` (quotidien), `server.health` (horaire).
+7. Récurrents : `server.health` (horaire, relève les métriques de capacité), `ssl.check` (quotidien), `release.aiReport` (à chaque dépôt de zip, sans bloquer le wizard).
 
 ## Provisioning des VPS sites (cloud-init)
 
 Image Debian 12. Le script cloud-init :
+
 - crée l'utilisateur `deploy` avec la clé publique du pilote, sans mot de passe,
 - installe Caddy (dépôt officiel) et Docker,
 - écrit `/etc/caddy/Caddyfile` avec `import /etc/caddy/sites/*.caddy`,
@@ -112,6 +114,7 @@ client.fr, www.client.fr {
 ```
 
 Bloc preview : identique sur `<slug>.preview.auscii.fr`, avec une porte d'accès par lien secret :
+
 - `/__preview/<token>` pose un cookie `auscii_preview=<token>` et redirige vers `/`,
 - sans cookie valide (matcher sur l'en-tête `Cookie`), Caddy sert une page « Accès réservé ».
 
@@ -122,6 +125,10 @@ HTTPS automatique par hôte (défi HTTP-01). Un enregistrement `A <slug>.preview
 - Le site poste sur `/__forms/contact`, même origine, donc aucun CORS. Caddy relaie vers le pilote avec l'en-tête `X-Site`.
 - Le pilote valide (honeypot, limite de débit par IP, taille), enregistre `FormSubmission`, envoie l'email à `Site.formsEmail`, puis redirige vers `/merci.html` si présent, sinon répond en JSON.
 - Aucun service à opérer sur les VPS sites.
+
+## Mode démo
+
+`DEMO_MODE=true` (ou l'interrupteur de l'en-tête, réservé aux admins) bascule la fabrique `getProviders()` sur les mocks. Les mocks reproduisent les délais et les états intermédiaires (commande de domaine en attente, serveur qui démarre, métriques qui évoluent). Les données de démo sont marquées `isDemo` et invisibles hors démo ; « Réinitialiser la démo » les recrée, y compris les fichiers des releases et les captures.
 
 ## Sécurité
 

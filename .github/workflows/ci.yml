@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: auscii
+          POSTGRES_PASSWORD: auscii
+          POSTGRES_DB: auscii
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U auscii" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://auscii:auscii@localhost:5432/auscii
+      APP_URL: http://localhost:3100
+      BETTER_AUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+      APP_ENCRYPTION_KEY: 7f3b2c1d9e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c
+      DATA_DIR: ./data
+      ADMIN_EMAIL: admin@auscii.com
+      ADMIN_PASSWORD: admin1234
+      DEMO_MODE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm db:deploy
+      - run: pnpm db:seed
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: test-results
