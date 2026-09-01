@@ -20,8 +20,10 @@ import { NativeSelect } from "@/components/ui/select";
 import {
   orderServerAction,
   refreshMetricsAction,
+  retestServerAction,
   retireServerAction,
 } from "@/server/actions/settings";
+import { AddServerDialog } from "./add-server-dialog";
 import type { CapacityVerdict } from "@/server/capacity";
 import type { ServerMetrics } from "@/server/providers/types";
 import type { CapacityThresholds } from "@/server/settings";
@@ -72,7 +74,13 @@ export function ServersTable({
   defaultOffer,
   isAdmin,
   thresholds,
+  bootstrap,
+  sshReady,
+  demo,
 }: {
+  bootstrap: string;
+  sshReady: boolean;
+  demo: boolean;
   servers: ServerRow[];
   offers: { id: string; monthlyPrice: number; vcpus: number; ramGb: number; diskGb: number }[];
   defaultOffer: string;
@@ -104,6 +112,15 @@ export function ServersTable({
     });
   }
 
+  function retest(id: string, forgetHostKey: boolean) {
+    startTransition(async () => {
+      const res = await retestServerAction(id, forgetHostKey);
+      if (!res.ok) toast.error(res.error);
+      else toast.success("Vérification relancée");
+      setTimeout(() => router.refresh(), 1500);
+    });
+  }
+
   function retire(id: string) {
     startTransition(async () => {
       const res = await retireServerAction(id);
@@ -120,6 +137,7 @@ export function ServersTable({
           {pending ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />} Relever les
           métriques
         </Button>
+        {isAdmin && <AddServerDialog script={bootstrap} sshReady={sshReady} demo={demo} />}
         {isAdmin && (
           <Button onClick={() => setOpen(true)}>
             <PlusIcon /> Commander un serveur
@@ -171,10 +189,39 @@ export function ServersTable({
                     {m
                       ? `${formatBytes(m.diskFreeBytes)} libres · relevé ${relativeTime(m.collectedAt)}`
                       : ""}
+                    {s.status === "error" &&
+                      (m as unknown as { lastError?: string } | null)?.lastError && (
+                        <span className="text-destructive ml-2">
+                          {(m as unknown as { lastError?: string }).lastError}
+                        </span>
+                      )}
                     {s.verdict.reasons.length > 0 && (
                       <span className="text-destructive ml-2">{s.verdict.reasons[0]}</span>
                     )}
                   </span>
+                  {isAdmin && (s.status === "error" || s.status === "bootstrapping") && (
+                    <span className="mr-3 flex gap-2">
+                      <button
+                        type="button"
+                        className="underline"
+                        onClick={() => retest(s.id, false)}
+                        disabled={pending}
+                      >
+                        Retester
+                      </button>
+                      {s.status === "error" && (
+                        <button
+                          type="button"
+                          className="underline"
+                          onClick={() => retest(s.id, true)}
+                          disabled={pending}
+                          title="Après une réinstallation du serveur"
+                        >
+                          Oublier la clé d'hôte
+                        </button>
+                      )}
+                    </span>
+                  )}
                   {isAdmin && s.status !== "retired" && s.sitesCount === 0 && (
                     <button
                       type="button"

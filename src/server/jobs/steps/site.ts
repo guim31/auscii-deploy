@@ -7,7 +7,6 @@ import { releaseDir, screenshotsDir } from "../../releases/paths";
 import { runtimeFor } from "../../deploy/runtime";
 import { serverRef } from "./server";
 import type { Logger } from "../log";
-import { env } from "../../env";
 
 export function pilotHost(settings: Settings): string {
   return `deploy.${settings.techDomain}`;
@@ -66,21 +65,33 @@ export async function checkTls(
   else await log.warn(`HTTPS pas encore disponible sur ${host} : ${result.error ?? "inconnu"}`);
 }
 
+/**
+ * Captures the site. Real captures load the public URL (production domain, or
+ * the preview host through its secret link); the demo mock ignores the URL.
+ * A missing thumbnail never fails a deployment.
+ */
 export async function captureScreenshot(
   site: Site,
-  url: string,
+  environment: "staging" | "production",
   providers: Providers,
+  settings: Settings,
   log: Logger,
 ): Promise<void> {
   const base = path.join(screenshotsDir(), site.id);
-  const ext = await providers.screenshot.capture(url, `${base}.svg`, site.clientName);
-  await prisma.site.update({
-    where: { id: site.id },
-    data: { screenshotPath: `${site.id}.${ext}` },
-  });
-  await log.info("Capture d'écran mise à jour");
-}
-
-export function localPreviewUrl(releaseId: string): string {
-  return `${env().APP_URL}/api/preview/${releaseId}/`;
+  const url =
+    environment === "production" && site.domain
+      ? `https://${site.domain}/`
+      : `https://${site.previewHost ?? previewHostFor(site.slug, settings)}/__preview/${site.previewToken}`;
+  try {
+    const ext = await providers.screenshot.capture(url, `${base}.svg`, site.clientName);
+    await prisma.site.update({
+      where: { id: site.id },
+      data: { screenshotPath: `${site.id}.${ext}` },
+    });
+    await log.info("Capture d'écran mise à jour");
+  } catch (err) {
+    await log.warn(
+      `Capture d'écran impossible : ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }

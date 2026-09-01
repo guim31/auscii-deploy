@@ -30,7 +30,9 @@ export function DomainStep({
   initial,
   placement,
   isAdmin,
+  gandiConfigured,
 }: {
+  gandiConfigured: boolean;
   siteId: string;
   initial: {
     clientName: string;
@@ -46,7 +48,7 @@ export function DomainStep({
   const router = useRouter();
   const [clientName, setClientName] = useState(initial.clientName);
   const [fqdn, setFqdn] = useState(initial.fqdn);
-  const [owned, setOwned] = useState(initial.owned);
+  const [owned, setOwned] = useState(gandiConfigured ? initial.owned : true);
   const [formsEmail, setFormsEmail] = useState(initial.formsEmail);
   const [check, setCheck] = useState<DomainAvailability | null>(
     initial.fqdn && initial.price
@@ -121,6 +123,17 @@ export function DomainStep({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
+          {!gandiConfigured && (
+            <Alert variant="info">
+              <AlertTriangleIcon />
+              <AlertTitle>Gandi n'est pas configuré</AlertTitle>
+              <AlertDescription>
+                Indiquez un domaine que vous possédez déjà. Les enregistrements DNS à créer seront
+                affichés sur la page du site après le provisioning. L'achat automatique arrive avec
+                l'intégration Gandi.
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="flex flex-col gap-2">
             <Label htmlFor="clientName">Nom du client</Label>
             <Input

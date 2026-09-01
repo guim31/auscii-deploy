@@ -27,6 +27,13 @@ Chaque phase est une pull request testable indépendamment.
 - Phases 2 à 7 : tests de contrat des adaptateurs (mock et réel derrière la même suite), puis run réel sur un VPS de test et un domaine de test peu cher, avec checklist : HTTPS valide, rollback, formulaire reçu, commande de serveur annulable.
 - Phase 8 : installation à blanc du pilote en suivant uniquement le runbook.
 
+## Ce que la phase 2 contient
+
+- Agent SSH réel (`ssh2`) : connexion avec la clé du pilote et vérification de la clé d'hôte, envoi des releases en `tar.gz`, bascule atomique, configuration Caddy validée avant rechargement, métriques, contrôle TLS.
+- Clés SSH générées ou importées depuis l'interface, script d'installation `infra/bootstrap-server.sh` partagé avec le cloud-init de la phase 4, enregistrement d'un serveur existant.
+- Captures d'écran Chromium des sites publiés.
+- Mode réel partiel : sans Gandi ni GitHub, les étapes correspondantes sont ignorées avec avertissement et les enregistrements DNS attendus sont affichés.
+
 ## Prérequis à réunir avant la phase 2
 
 - Un domaine technique acheté chez Gandi (ex. `auscii.site`) et saisi dans Paramètres > Agence.

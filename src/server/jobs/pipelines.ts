@@ -5,14 +5,10 @@ import { enqueue, QUEUES } from "./boss";
 import { runPipeline, type StepDefinition } from "./pipeline";
 import { bootstrapServer, listCandidates, orderServer, serverRef } from "./steps/server";
 import { configureDns, registerDomain } from "./steps/domain";
-import {
-  captureScreenshot,
-  checkTls,
-  deployRelease,
-  localPreviewUrl,
-  productionHosts,
-} from "./steps/site";
+import { captureScreenshot, checkTls, deployRelease, productionHosts } from "./steps/site";
 import { pickServer } from "../capacity";
+import { ProviderNotConfiguredError } from "../providers/types";
+import { describeRecords, expectedDnsRecords } from "../deploy/dns";
 
 export type ProvisionPayload = {
   deploymentId: string;
@@ -81,7 +77,16 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
       if (!domain) throw new Error("Aucun domaine renseigné");
       if (domain.owned) return { skipped: `${domain.fqdn} est déjà dans le compte Gandi` };
       if (domain.orderStatus === "registered") return { skipped: "déjà enregistré" };
-      await registerDomain(domain, ctx.providers, ctx.settings, ctx.log);
+      try {
+        await registerDomain(domain, ctx.providers, ctx.settings, ctx.log);
+      } catch (err) {
+        if (!(err instanceof ProviderNotConfiguredError)) throw err;
+        await ctx.log.warn(
+          `${err.message} Le domaine ${domain.fqdn} doit être acheté et géré manuellement.`,
+        );
+        await prisma.domain.update({ where: { id: domain.id }, data: { owned: true } });
+        return { skipped: "Gandi non configuré : domaine géré manuellement" };
+      }
     },
   },
   {
@@ -90,11 +95,25 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
     run: async (ctx) => {
       const domain = await prisma.domain.findUniqueOrThrow({ where: { siteId: ctx.site.id } });
       const server = await prisma.server.findUniqueOrThrow({ where: { id: ctx.site.serverId! } });
-      await configureDns(domain, ctx.site.slug, server, ctx.providers, ctx.settings, ctx.log);
       await prisma.site.update({
         where: { id: ctx.site.id },
         data: { previewHost: previewHostFor(ctx.site.slug, ctx.settings) },
       });
+      try {
+        await configureDns(domain, ctx.site.slug, server, ctx.providers, ctx.settings, ctx.log);
+      } catch (err) {
+        if (!(err instanceof ProviderNotConfiguredError)) throw err;
+        const records = expectedDnsRecords(
+          domain.fqdn,
+          ctx.site.slug,
+          server.ip ?? "?",
+          ctx.settings,
+        );
+        await ctx.log.warn(
+          `${err.message} Créez ces enregistrements A à la main : ${describeRecords(records)}`,
+        );
+        return { skipped: `DNS manuel : ${describeRecords(records)}` };
+      }
     },
   },
   {
@@ -102,9 +121,15 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
     label: "Dépôt GitHub",
     run: async (ctx) => {
       if (ctx.site.gitRepo) return { skipped: `dépôt ${ctx.site.gitRepo} existant` };
-      const repo = await ctx.providers.git.createRepo(ctx.site.slug);
-      await ctx.log.success(`Dépôt privé ${repo.fullName} créé (${repo.url})`);
-      await prisma.site.update({ where: { id: ctx.site.id }, data: { gitRepo: repo.fullName } });
+      try {
+        const repo = await ctx.providers.git.createRepo(ctx.site.slug);
+        await ctx.log.success(`Dépôt privé ${repo.fullName} créé (${repo.url})`);
+        await prisma.site.update({ where: { id: ctx.site.id }, data: { gitRepo: repo.fullName } });
+      } catch (err) {
+        if (!(err instanceof ProviderNotConfiguredError)) throw err;
+        await ctx.log.warn(`${err.message} Les versions restent conservées sur le pilote.`);
+        return { skipped: "GitHub non configuré : versionnement local" };
+      }
     },
   },
   {
@@ -162,7 +187,7 @@ const stagingSteps: StepDefinition[] = [
       });
       if (release.commitSha)
         return { skipped: `commit ${release.commitSha.slice(0, 7)} déjà poussé` };
-      if (!ctx.site.gitRepo) throw new Error("Dépôt GitHub absent");
+      if (!ctx.site.gitRepo) return { skipped: "pas de dépôt GitHub, versionnement local" };
       const { commitSha } = await ctx.providers.git.pushRelease({
         repo: ctx.site.gitRepo,
         releaseDir: `releases/${release.id}`,
@@ -220,12 +245,7 @@ const stagingSteps: StepDefinition[] = [
     label: "Capture d'écran",
     run: async (ctx) => {
       if (ctx.site.status === "live") return { skipped: "la capture de production est conservée" };
-      await captureScreenshot(
-        ctx.site,
-        localPreviewUrl(ctx.deployment.releaseId!),
-        ctx.providers,
-        ctx.log,
-      );
+      await captureScreenshot(ctx.site, "staging", ctx.providers, ctx.settings, ctx.log);
     },
   },
 ];
@@ -253,7 +273,13 @@ const promoteSteps: StepDefinition[] = [
         where: { id: ctx.deployment.releaseId! },
       });
       if (release.gitTag) return { skipped: `tag ${release.gitTag} existant` };
-      if (!ctx.site.gitRepo) throw new Error("Dépôt GitHub absent");
+      if (!ctx.site.gitRepo) {
+        await prisma.release.update({
+          where: { id: release.id },
+          data: { gitTag: `local-v${release.version}` },
+        });
+        return { skipped: "pas de dépôt GitHub, version marquée localement" };
+      }
       const tag = `prod-${new Date()
         .toISOString()
         .slice(0, 16)
@@ -303,12 +329,7 @@ const promoteSteps: StepDefinition[] = [
     key: "screenshot",
     label: "Capture d'écran",
     run: async (ctx) => {
-      await captureScreenshot(
-        ctx.site,
-        localPreviewUrl(ctx.deployment.releaseId!),
-        ctx.providers,
-        ctx.log,
-      );
+      await captureScreenshot(ctx.site, "production", ctx.providers, ctx.settings, ctx.log);
       await ctx.log.success(`${ctx.site.domain} est en ligne.`);
     },
   },
@@ -357,12 +378,7 @@ const rollbackSteps: StepDefinition[] = [
     key: "screenshot",
     label: "Capture d'écran",
     run: async (ctx) => {
-      await captureScreenshot(
-        ctx.site,
-        localPreviewUrl(ctx.deployment.releaseId!),
-        ctx.providers,
-        ctx.log,
-      );
+      await captureScreenshot(ctx.site, "production", ctx.providers, ctx.settings, ctx.log);
     },
   },
 ];

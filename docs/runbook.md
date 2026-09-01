@@ -36,6 +36,26 @@ Avec `DEMO_MODE=true`, tout le parcours fonctionne sans aucune clé API ni rése
 
 Tests : `pnpm test` (Vitest, base `DATABASE_URL_TEST` si définie), `pnpm e2e` (Playwright, démarre l'app et le worker en mode démo).
 
+## Ajouter un serveur existant (phase 2)
+
+1. Paramètres > Intégrations > SSH : **Générer une paire de clés** (ou importer une clé privée OpenSSH existante). La clé publique s'affiche.
+2. Créer un VPS Debian 12 (Scaleway DEV1-S conseillé) avec un accès root.
+3. Paramètres > Serveurs > **Ajouter un serveur existant** : copier le script affiché (il contient la clé publique), le lancer en root sur le VPS (`bash bootstrap.sh`). Il installe Caddy, Docker, le pare-feu, l'utilisateur `deploy` et pose le marqueur `/var/lib/auscii-ready`.
+4. Renseigner le nom, l'IP et valider. L'outil attend le marqueur, mémorise l'empreinte de la clé d'hôte (vérifiée à chaque connexion) et relève les métriques. Le serveur passe à « Prêt ».
+5. En cas d'erreur : « Retester ». Après une réinstallation du serveur : « Oublier la clé d'hôte » puis retester.
+
+## DNS manuel (sans Gandi)
+
+Tant que l'intégration Gandi n'est pas configurée, le wizard force « domaine déjà possédé » et le provisioning ignore l'achat et le DNS. La page du site affiche les trois enregistrements `A` à créer chez le registrar : l'apex et `www` du domaine client, et `<slug>.preview.<domaine technique>`. Caddy émet le certificat HTTPS dès que le nom résout vers le serveur. Le relais des formulaires (`/__forms/*`) suppose un pilote joignable publiquement (`deploy.<domaine technique>`), ce qui sera le cas après la phase 8.
+
+## Checklist de validation de la phase 2
+
+1. Clés SSH générées, serveur ajouté et « Prêt », métriques visibles.
+2. Site créé avec un domaine que vous contrôlez, enregistrements DNS créés selon la page du site.
+3. Zip déposé, préproduction déployée, lien secret ouvert en HTTPS (`https://<slug>.preview.<tech>/__preview/<token>`), page « Accès réservé » sans le cookie.
+4. Publication en production, HTTPS valide sur le domaine et `www`, capture d'écran sur le tableau de bord.
+5. Nouveau zip, mise à jour, puis retour à la version précédente : le site bascule instantanément.
+
 ## Procédures (à détailler en phase 8)
 
 - Installation à blanc du pilote.

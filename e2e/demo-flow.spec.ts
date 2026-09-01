@@ -123,3 +123,24 @@ test("settings pages are reachable for the admin", async ({ page }) => {
   await page.goto("/settings/users");
   await expect(page.getByText(EMAIL)).toBeVisible();
 });
+
+test("SSH keys and manual server registration (demo)", async ({ page }) => {
+  await login(page);
+  await page.goto("/settings/integrations");
+  page.once("dialog", (d) => d.accept());
+  await page.getByTestId("generate-ssh-keys").click();
+  await expect(page.getByText("Clé prête")).toBeVisible();
+  await expect(page.getByText(/^ssh-ed25519 /)).toBeVisible();
+
+  await page.goto("/settings/servers");
+  await page.getByTestId("add-server").click();
+  await expect(page.getByText("PILOT_KEY='ssh-ed25519")).toBeVisible();
+  const name = `manuel-${Date.now().toString(36)}`;
+  await page.getByLabel("Nom", { exact: true }).fill(name);
+  await page.getByLabel("Adresse IP").fill("203.0.113.10");
+  await page.getByTestId("add-server-submit").click();
+  await expect(page.getByText(name)).toBeVisible();
+  await expect(page.locator("div", { hasText: name }).getByText("Prêt").first()).toBeVisible({
+    timeout: 30_000,
+  });
+});
