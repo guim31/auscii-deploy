@@ -23,8 +23,8 @@ L'application se divise en deux zones.
 2. **Provisioning** : console système en temps réel montrant l'enregistrement du domaine (Gandi), la configuration DNS (LiveDNS), la création du repo privé GitHub et la préparation du serveur.
 3. **Site** : dépôt du `.zip` produit avec Claude Code, vérification automatique du contenu, prévisualisation immédiate dans une iFrame, rapport court généré par Claude (SEO, accessibilité).
 4. **Mise en ligne** :
-   1. *Préproduction* : déploiement sur `client.preview.auscii.fr` avec un lien secret, pour validation interne et relecture client.
-   2. *Production* : clic final qui fusionne `staging` vers `production` et publie le site sur son domaine. Le site apparaît alors sur le dashboard.
+   1. _Préproduction_ : déploiement sur `client.preview.auscii.fr` avec un lien secret, pour validation interne et relecture client.
+   2. _Production_ : clic final qui fusionne `staging` vers `production` et publie le site sur son domaine. Le site apparaît alors sur le dashboard.
 
 ## Historique
 

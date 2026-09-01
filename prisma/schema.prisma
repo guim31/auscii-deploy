@@ -1,0 +1,307 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ServerStatus {
+  ordering
+  bootstrapping
+  ready
+  error
+  retired
+}
+
+enum SiteStatus {
+  draft
+  provisioning
+  ready
+  preview
+  live
+  error
+}
+
+enum SiteRuntime {
+  static
+  docker
+}
+
+enum DomainOrderStatus {
+  none
+  pending
+  registered
+  failed
+}
+
+enum DeployKind {
+  provision
+  deploy
+  promote
+  rollback
+}
+
+enum DeployEnv {
+  staging
+  production
+}
+
+enum DeployStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
+enum LogLevel {
+  info
+  success
+  warn
+  error
+}
+
+// ---------- Auth (better-auth) ----------
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  role          String    @default("manager")
+  banned        Boolean   @default(false)
+  banReason     String?
+  banExpires    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+
+  @@map("user")
+}
+
+model Session {
+  id             String   @id
+  expiresAt      DateTime
+  token          String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  ipAddress      String?
+  userAgent      String?
+  impersonatedBy String?
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  issuer                String
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ---------- Settings & integrations ----------
+
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model Integration {
+  id         String    @id @default(cuid())
+  provider   String    @unique
+  encrypted  String
+  updatedAt  DateTime  @updatedAt
+  lastTestAt DateTime?
+  lastTestOk Boolean?
+}
+
+// ---------- Infrastructure ----------
+
+model Server {
+  id           String       @id @default(cuid())
+  name         String       @unique
+  provider     String       @default("scaleway")
+  providerId   String?
+  ip           String?
+  sshUser      String       @default("deploy")
+  status       ServerStatus @default(ordering)
+  offer        String
+  zone         String       @default("fr-par-1")
+  vcpus        Int          @default(2)
+  monthlyPrice Float?
+  metrics      Json?
+  isDemo       Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  sites        Site[]
+}
+
+model Site {
+  id               String           @id @default(cuid())
+  slug             String           @unique
+  clientName       String
+  domain           String?
+  previewHost      String?
+  previewToken     String
+  formsEmail       String?
+  runtime          SiteRuntime      @default(static)
+  status           SiteStatus       @default(draft)
+  serverId         String?
+  server           Server?          @relation(fields: [serverId], references: [id])
+  gitRepo          String?
+  screenshotPath   String?
+  stagingReleaseId String?
+  liveReleaseId    String?
+  lastPublishedAt  DateTime?
+  isDemo           Boolean          @default(false)
+  createdById      String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  domainRecord     Domain?
+  releases         Release[]
+  deployments      Deployment[]
+  submissions      FormSubmission[]
+  sslChecks        SslCheck[]
+
+  @@index([status])
+}
+
+model Domain {
+  id            String            @id @default(cuid())
+  siteId        String            @unique
+  site          Site              @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  fqdn          String
+  registrar     String            @default("gandi")
+  owned         Boolean           @default(false)
+  orderId       String?
+  orderStatus   DomainOrderStatus @default(none)
+  price         Float?
+  currency      String?
+  expiresAt     DateTime?
+  dnsConfigured Boolean           @default(false)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+}
+
+model Release {
+  id          String       @id @default(cuid())
+  siteId      String
+  site        Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  version     Int
+  commitSha   String?
+  gitTag      String?
+  archiveHash String
+  sizeBytes   Int
+  fileCount   Int
+  analysis    Json?
+  aiReport    Json?
+  createdById String?
+  createdAt   DateTime     @default(now())
+  deployments Deployment[]
+
+  @@unique([siteId, version])
+}
+
+model Deployment {
+  id            String          @id @default(cuid())
+  siteId        String
+  site          Site            @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  releaseId     String?
+  release       Release?        @relation(fields: [releaseId], references: [id])
+  kind          DeployKind
+  environment   DeployEnv?
+  status        DeployStatus    @default(queued)
+  steps         Json            @default("[]")
+  error         String?
+  rollbackOfId  String?
+  triggeredById String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime        @default(now())
+  logs          DeploymentLog[]
+
+  @@index([siteId, createdAt])
+}
+
+model DeploymentLog {
+  id           Int        @id @default(autoincrement())
+  deploymentId String
+  deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  ts           DateTime   @default(now())
+  level        LogLevel   @default(info)
+  step         String?
+  message      String
+
+  @@index([deploymentId, id])
+}
+
+model FormSubmission {
+  id        String    @id @default(cuid())
+  siteId    String
+  site      Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  payload   Json
+  fromIp    String?
+  emailedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([siteId, createdAt])
+}
+
+model SslCheck {
+  id        String    @id @default(cuid())
+  siteId    String
+  site      Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  host      String
+  ok        Boolean
+  issuer    String?
+  expiresAt DateTime?
+  error     String?
+  checkedAt DateTime  @default(now())
+
+  @@index([siteId, checkedAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  userEmail String?
+  action    String
+  target    String?
+  amount    Float?
+  currency  String?
+  details   Json?
+  createdAt DateTime @default(now())
+}

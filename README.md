@@ -2,18 +2,29 @@
 
 Outil web interne de l'agence AUSCII pour mettre en ligne, en quelques clics, les sites vitrine créés avec Claude Code : choix du domaine, dépôt d'un `.zip`, préproduction, publication.
 
-> État du projet : **phase 0, cadrage**. Aucun code applicatif pour l'instant.
+> État du projet : **phase 1 livrée**. Le parcours complet fonctionne en mode démo ; les intégrations réelles (SSH, Gandi, Scaleway, GitHub, Resend, Anthropic) arrivent dans les phases 2 à 7.
+
+## Démarrer
+
+```bash
+cp .env.example .env
+docker compose up -d db
+pnpm install && pnpm db:migrate && pnpm db:seed
+pnpm dev
+```
+
+Connexion sur http://localhost:3000 avec `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Voir `docs/runbook.md`.
 
 ## Documents
 
-| Document | Contenu |
-|---|---|
-| [docs/concept.md](docs/concept.md) | Vision et parcours utilisateur |
-| [docs/scope-v1.md](docs/scope-v1.md) | Périmètre fonctionnel détaillé de la v1, hors périmètre, décisions |
+| Document                                     | Contenu                                                                   |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| [docs/concept.md](docs/concept.md)           | Vision et parcours utilisateur                                            |
+| [docs/scope-v1.md](docs/scope-v1.md)         | Périmètre fonctionnel détaillé de la v1, hors périmètre, décisions        |
 | [docs/architecture.md](docs/architecture.md) | Stack technique, architecture, modèle de données, pipeline de déploiement |
-| [docs/runbook.md](docs/runbook.md) | Exploitation : installation du pilote, prérequis, incidents |
-| [docs/roadmap.md](docs/roadmap.md) | Phases de réalisation et critères de fin |
-| [CLAUDE.md](CLAUDE.md) | Conventions pour le développement avec Claude Code |
+| [docs/runbook.md](docs/runbook.md)           | Exploitation : installation du pilote, prérequis, incidents               |
+| [docs/roadmap.md](docs/roadmap.md)           | Phases de réalisation et critères de fin                                  |
+| [CLAUDE.md](CLAUDE.md)                       | Conventions pour le développement avec Claude Code                        |
 
 ## En une phrase par étape
 
