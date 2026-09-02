@@ -55,6 +55,21 @@ Tant que l'intégration Gandi n'est pas configurée, le wizard force « domaine 
 3. Chaque achat active le renouvellement automatique. Un job quotidien rafraîchit la date d'expiration ; le tableau de bord signale un domaine à moins de 30 jours sans renouvellement automatique.
 4. Le domaine technique (`auscii.site` ou autre) doit être chez Gandi avec LiveDNS pour que les enregistrements de préproduction soient créés automatiquement.
 
+## Scaleway (phase 4)
+
+1. Console Scaleway > IAM > Applications : créer l'application « auscii-deploy », lui attribuer une politique avec `InstancesFullAccess` sur le projet (ajoutez `ProjectReadOnly` pour que le test identifie le projet), puis générer une clé API. Copier la clé secrète et l'identifiant du projet dans Paramètres > Intégrations > Scaleway, puis « Tester ».
+2. Paramètres > Agence : offre par défaut (`DEV1-S` conseillé) et zone (`fr-par-1`). Les prix affichés sont estimés à partir du tarif horaire (× 730 h).
+3. La clé SSH du pilote doit exister avant toute commande : elle est injectée dans le cloud-init du serveur. Le serveur commandé est prêt en quelques minutes sans intervention.
+4. Suppression : Paramètres > Serveurs > « Supprimer » sur un serveur sans site (admin, saisie du nom pour confirmer). L'instance, ses volumes et son IP sont supprimés ; la facturation s'arrête. Un serveur ajouté à la main est seulement retiré de la liste.
+5. Le pare-feu `ufw` du script d'installation limite l'exposition aux ports 22, 80 et 443 ; le groupe de sécurité Scaleway par défaut est conservé.
+
+## Checklist de validation de la phase 4
+
+1. Clé IAM testée avec succès depuis l'outil.
+2. Commande d'un `DEV1-S` depuis Paramètres > Serveurs : passage à « Prêt » sans intervention, métriques visibles.
+3. Déploiement d'un site sur ce serveur (préproduction puis production).
+4. Suppression du serveur depuis l'outil une fois vidé ; vérification dans la console Scaleway qu'il ne reste ni instance, ni volume, ni IP.
+
 ## Checklist de validation de la phase 3
 
 1. Jeton testé avec succès, contact propriétaire enregistré.

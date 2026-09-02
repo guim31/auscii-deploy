@@ -12,6 +12,7 @@ export const QUEUES = {
   rollback: "site.rollback",
   serverOrder: "server.order",
   serverBootstrap: "server.bootstrap",
+  serverDelete: "server.delete",
   serverHealth: "server.health",
   sslCheck: "ssl.check",
   domainRefresh: "domain.refresh",

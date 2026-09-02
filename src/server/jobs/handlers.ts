@@ -13,6 +13,7 @@ import { checkAllCertificates, collectAllMetrics, orderStandaloneServer } from "
 import { refreshAllDomains } from "./domain-refresh";
 import { generateAiReport, type AiReportPayload } from "./ai-report";
 import { runServerBootstrap, type ServerBootstrapPayload } from "./steps/register-server";
+import { runServerDelete, type ServerDeletePayload } from "./steps/delete-server";
 
 const workOptions = { batchSize: 1, pollingIntervalSeconds: 1 } as const;
 
@@ -52,6 +53,9 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   });
   await boss.work<ServerBootstrapPayload>(QUEUES.serverBootstrap, workOptions, async (jobs) =>
     runServerBootstrap(one(jobs)),
+  );
+  await boss.work<ServerDeletePayload>(QUEUES.serverDelete, workOptions, async (jobs) =>
+    runServerDelete(one(jobs)),
   );
   await boss.work(QUEUES.serverHealth, { ...workOptions, pollingIntervalSeconds: 10 }, async () => {
     await collectAllMetrics();

@@ -19,6 +19,25 @@ describe("ssh keys", () => {
     expect(info.fingerprint).toBe(pair.fingerprint);
   });
 
+  it("generates keys that ssh2 accepts every time", () => {
+    for (let i = 0; i < 200; i++) {
+      const pair = generateSshKeyPair("loop");
+      expect(utils.parseKey(pair.privateKey)).not.toBeInstanceOf(Error);
+    }
+  });
+
+  it("signs and verifies with the generated key", () => {
+    const pair = generateSshKeyPair("sig");
+    const parsed = utils.parseKey(pair.privateKey);
+    if (parsed instanceof Error) throw parsed;
+    const data = Buffer.from("hello");
+    const signature = parsed.sign(data);
+    if (signature instanceof Error) throw signature;
+    const pub = utils.parseKey(pair.publicKey);
+    if (pub instanceof Error) throw pub;
+    expect(pub.verify(data, signature)).toBe(true);
+  });
+
   it("rejects garbage", () => {
     expect(() => inspectPrivateKey("not a key")).toThrow(/illisible/);
   });

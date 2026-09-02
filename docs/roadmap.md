@@ -41,6 +41,12 @@ Chaque phase est une pull request testable indépendamment.
 - Job quotidien `domain.refresh` et alerte d'expiration sur le tableau de bord.
 - Tests sur réponses simulées de l'API, test live optionnel en lecture seule (`TEST_GANDI_TOKEN`).
 
+## Ce que la phase 4 contient
+
+- `ScalewayProvider` réel : offres et disponibilité, création d'une instance Debian 12 avec IP publique routée, cloud-init et démarrage, suivi de l'état, suppression idempotente (instance, volumes, IP), test de la clé et du projet.
+- Suppression d'un serveur vide depuis l'outil (admin, confirmation par saisie du nom, audit, file `server.delete`).
+- Contrôle de la clé SSH du pilote avant toute commande.
+
 ## Prérequis à réunir avant la phase 2
 
 - Un domaine technique acheté chez Gandi (ex. `auscii.site`) et saisi dans Paramètres > Agence.

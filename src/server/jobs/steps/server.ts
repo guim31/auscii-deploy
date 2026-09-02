@@ -54,6 +54,11 @@ export async function orderServer(
   const offers = await providers.cloud.listOffers(settings.defaultZone);
   const offer = offers.find((o) => o.id === (offerId ?? settings.defaultOffer)) ?? offers[0];
   if (!offer) throw new Error("Aucune offre serveur disponible");
+  if (!providers.demo && !settings.sshPublicKey) {
+    throw new Error(
+      "Générez d'abord la clé SSH du pilote (Paramètres > Intégrations > SSH) : elle doit être installée sur le serveur commandé.",
+    );
+  }
   const name = await nextServerName(providers.demo);
   await log.info(
     `Commande d'un serveur ${offer.id} (${offer.vcpus} vCPU, ${offer.ramGb} Go, ${offer.monthlyPrice.toFixed(2)} €/mois) en ${settings.defaultZone}`,
@@ -82,7 +87,12 @@ export async function orderServer(
   await log.info(`Instance ${created.providerId} créée, démarrage en cours`);
   return prisma.server.update({
     where: { id: server.id },
-    data: { providerId: created.providerId, status: "bootstrapping" },
+    data: {
+      providerId: created.providerId,
+      ip: created.ip ?? null,
+      providerData: (created.metadata as object | undefined) ?? undefined,
+      status: "bootstrapping",
+    },
   });
 }
 
