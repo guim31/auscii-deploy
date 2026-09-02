@@ -5,6 +5,13 @@ import type { Settings } from "../../settings";
 import { previewHostFor } from "../../settings";
 import type { Logger } from "../log";
 
+const ORDER_POLL_ATTEMPTS = 60;
+const ORDER_POLL_DELAY_MS = 15_000;
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export async function registerDomain(
   domain: Domain,
   providers: Providers,
@@ -16,9 +23,18 @@ export async function registerDomain(
     await log.info(
       `Achat de ${domain.fqdn} chez Gandi (${domain.price?.toFixed(2) ?? "?"} ${domain.currency ?? "EUR"})`,
     );
+    const c = settings.gandiContact;
     const order = await providers.domain.register(domain.fqdn, {
-      organizationId: settings.gandiContact.organizationId || undefined,
-      email: settings.gandiContact.email || "contact@auscii.com",
+      organizationId: c.organizationId || undefined,
+      email: c.email,
+      orgName: c.orgName || undefined,
+      givenName: c.givenName || undefined,
+      familyName: c.familyName || undefined,
+      phone: c.phone || undefined,
+      street: c.street || undefined,
+      zip: c.zip || undefined,
+      city: c.city || undefined,
+      country: c.country || undefined,
     });
     if (order.status === "failed") throw new Error(order.message ?? "Achat du domaine refusé");
     domain = await prisma.domain.update({
@@ -26,7 +42,9 @@ export async function registerDomain(
       data: { orderId: order.orderId, orderStatus: "pending" },
     });
   }
-  for (let i = 0; i < 40; i++) {
+  // Gandi usually registers within a couple of minutes; poll for up to 15 minutes.
+  for (let i = 0; i < ORDER_POLL_ATTEMPTS; i++) {
+    if (i > 0) await sleep(providers.demo ? 200 : ORDER_POLL_DELAY_MS);
     const order = await providers.domain.getOrder(domain.orderId!);
     if (order.status === "registered") {
       await log.success(
@@ -41,9 +59,11 @@ export async function registerDomain(
       await prisma.domain.update({ where: { id: domain.id }, data: { orderStatus: "failed" } });
       throw new Error(order.message ?? "L'enregistrement du domaine a échoué");
     }
-    await log.info("Enregistrement en cours chez le registrar…");
+    if (i % 4 === 0) await log.info(order.message ?? "Enregistrement en cours chez le registrar…");
   }
-  throw new Error("L'enregistrement du domaine prend trop de temps, relancez plus tard");
+  throw new Error(
+    "Gandi n'a pas encore terminé l'enregistrement. Relancez cette étape dans quelques minutes : la commande n'est pas perdue.",
+  );
 }
 
 export async function configureDns(

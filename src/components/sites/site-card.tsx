@@ -34,6 +34,8 @@ export type SiteCardData = {
   screenshot: boolean;
   lastPublishedAt: string | null;
   ssl: { ok: boolean; issuer: string | null; expiresAt: string | null } | null;
+  domainExpiresAt: string | null;
+  domainAutorenew: boolean;
   liveReleaseId: string | null;
   stagingReleaseId: string | null;
   demo: boolean;
@@ -45,6 +47,8 @@ export function SiteCard({ site }: { site: SiteCardData }) {
   const previewSrc = previewReleaseId ? `/api/preview/${previewReleaseId}/` : null;
   const liveUrl = site.domain ? `https://${site.domain}` : null;
   const days = daysUntil(site.ssl?.expiresAt);
+  const domainDays = daysUntil(site.domainExpiresAt);
+  const domainWarning = domainDays !== null && domainDays < 30 && !site.domainAutorenew;
 
   return (
     <Card className="gap-0 overflow-hidden py-0">
@@ -105,6 +109,14 @@ export function SiteCard({ site }: { site: SiteCardData }) {
               "—"
             )}
           </dd>
+          {domainWarning && (
+            <>
+              <dt className="text-destructive">Domaine</dt>
+              <dd className="text-destructive">
+                expire le {formatDate(site.domainExpiresAt)}, renouvellement non automatique
+              </dd>
+            </>
+          )}
           <dt>Publié</dt>
           <dd className="text-foreground">
             {site.lastPublishedAt ? formatDateTime(site.lastPublishedAt) : "Pas encore"}

@@ -14,6 +14,7 @@ export const QUEUES = {
   serverBootstrap: "server.bootstrap",
   serverHealth: "server.health",
   sslCheck: "ssl.check",
+  domainRefresh: "domain.refresh",
   aiReport: "release.aiReport",
 } as const;
 

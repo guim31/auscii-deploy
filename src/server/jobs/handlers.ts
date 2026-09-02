@@ -10,6 +10,7 @@ import {
   type ProvisionPayload,
 } from "./pipelines";
 import { checkAllCertificates, collectAllMetrics, orderStandaloneServer } from "./maintenance";
+import { refreshAllDomains } from "./domain-refresh";
 import { generateAiReport, type AiReportPayload } from "./ai-report";
 import { runServerBootstrap, type ServerBootstrapPayload } from "./steps/register-server";
 
@@ -58,6 +59,14 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   await boss.work(QUEUES.sslCheck, { ...workOptions, pollingIntervalSeconds: 10 }, async () => {
     await checkAllCertificates();
   });
+  await boss.work(
+    QUEUES.domainRefresh,
+    { ...workOptions, pollingIntervalSeconds: 10 },
+    async () => {
+      await refreshAllDomains();
+    },
+  );
+  await boss.schedule(QUEUES.domainRefresh, "0 7 * * *");
   await boss.schedule(QUEUES.serverHealth, "0 * * * *");
   await boss.schedule(QUEUES.sslCheck, "30 6 * * *");
 }

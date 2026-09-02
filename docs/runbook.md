@@ -48,6 +48,20 @@ Tests : `pnpm test` (Vitest, base `DATABASE_URL_TEST` si définie), `pnpm e2e` (
 
 Tant que l'intégration Gandi n'est pas configurée, le wizard force « domaine déjà possédé » et le provisioning ignore l'achat et le DNS. La page du site affiche les trois enregistrements `A` à créer chez le registrar : l'apex et `www` du domaine client, et `<slug>.preview.<domaine technique>`. Caddy émet le certificat HTTPS dès que le nom résout vers le serveur. Le relais des formulaires (`/__forms/*`) suppose un pilote joignable publiquement (`deploy.<domaine technique>`), ce qui sera le cas après la phase 8.
 
+## Gandi (phase 3)
+
+1. Sur gandi.net : Paramètres du compte > Sécurité > Jetons d'accès personnels. Créer un jeton lié à l'organisation qui portera les domaines, avec les droits ci-dessus. Le copier dans Paramètres > Intégrations > Gandi, puis « Tester » : l'outil affiche le compte et l'organisation.
+2. Paramètres > Agence : renseigner l'identifiant d'organisation (affiché par le test) et le contact propriétaire complet (raison sociale, prénom, nom, email, téléphone au format `+33.612345678`, adresse, code postal, ville, pays). Gandi refuse tout achat avec un contact incomplet ; l'outil le vérifie à blanc (`Dry-Run`) avant de facturer.
+3. Chaque achat active le renouvellement automatique. Un job quotidien rafraîchit la date d'expiration ; le tableau de bord signale un domaine à moins de 30 jours sans renouvellement automatique.
+4. Le domaine technique (`auscii.site` ou autre) doit être chez Gandi avec LiveDNS pour que les enregistrements de préproduction soient créés automatiquement.
+
+## Checklist de validation de la phase 3
+
+1. Jeton testé avec succès, contact propriétaire enregistré.
+2. Étape 1 du wizard : vérification de disponibilité réelle avec prix, suggestions d'extensions.
+3. Achat d'un domaine de test peu cher après confirmation ; la console affiche la commande, l'enregistrement et le renouvellement automatique ; la date d'expiration apparaît.
+4. DNS créés automatiquement (apex, www, préproduction) ; HTTPS émis sur la préproduction puis la production.
+
 ## Checklist de validation de la phase 2
 
 1. Clés SSH générées, serveur ajouté et « Prêt », métriques visibles.

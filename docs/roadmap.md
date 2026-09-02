@@ -34,6 +34,13 @@ Chaque phase est une pull request testable indépendamment.
 - Captures d'écran Chromium des sites publiés.
 - Mode réel partiel : sans Gandi ni GitHub, les étapes correspondantes sont ignorées avec avertissement et les enregistrements DNS attendus sont affichés.
 
+## Ce que la phase 3 contient
+
+- `GandiProvider` réel sur l'API v5 : disponibilité et prix, achat validé à blanc puis exécuté, suivi jusqu'à l'enregistrement, renouvellement automatique, LiveDNS, liste des domaines, test du jeton.
+- Contact propriétaire complet dans Paramètres > Agence (l'agence est propriétaire des domaines).
+- Job quotidien `domain.refresh` et alerte d'expiration sur le tableau de bord.
+- Tests sur réponses simulées de l'API, test live optionnel en lecture seule (`TEST_GANDI_TOKEN`).
+
 ## Prérequis à réunir avant la phase 2
 
 - Un domaine technique acheté chez Gandi (ex. `auscii.site`) et saisi dans Paramètres > Agence.
