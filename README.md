@@ -2,7 +2,7 @@
 
 Outil web interne de l'agence AUSCII pour mettre en ligne, en quelques clics, les sites vitrine créés avec Claude Code : choix du domaine, dépôt d'un `.zip`, préproduction, publication.
 
-> État du projet : **phase 1 livrée**. Le parcours complet fonctionne en mode démo ; les intégrations réelles (SSH, Gandi, Scaleway, GitHub, Resend, Anthropic) arrivent dans les phases 2 à 7.
+> État du projet : **phase 2 livrée**. Le parcours complet fonctionne en mode démo, et le déploiement réel SSH + Caddy sur un VPS existant est en place (voir la checklist dans `docs/runbook.md`). Gandi, Scaleway, GitHub, Resend et Anthropic arrivent dans les phases 3 à 7.
 
 ## Démarrer
 

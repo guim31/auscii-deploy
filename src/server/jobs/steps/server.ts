@@ -5,7 +5,7 @@ import type { ServerMetrics, ServerRef } from "../../providers/types";
 import type { Settings } from "../../settings";
 import type { Logger } from "../log";
 import type { Providers } from "../../providers";
-import { cloudInitFor } from "../../deploy/cloud-init";
+import { cloudInitFor } from "../../deploy/bootstrap";
 
 export function serverRef(server: Server): ServerRef {
   return {
@@ -75,8 +75,8 @@ export async function orderServer(
     offer: offer.id,
     zone: settings.defaultZone,
     cloudInit: cloudInitFor({
-      sshPublicKey: "(clé du pilote)",
-      pilotHost: `deploy.${settings.techDomain}`,
+      sshPublicKey: settings.sshPublicKey || "(clé du pilote non générée)",
+      acmeEmail: settings.gandiContact.email || `admin@${settings.techDomain}`,
     }),
   });
   await log.info(`Instance ${created.providerId} créée, démarrage en cours`);
@@ -87,24 +87,32 @@ export async function orderServer(
 }
 
 /** Waits for the instance to get an IP, then for SSH and Caddy. */
+/** Waits for the instance to get an IP (cloud servers), then for SSH and Caddy. */
 export async function bootstrapServer(
   server: Server,
   providers: Providers,
   log: Logger,
 ): Promise<Server> {
   if (server.status === "ready") return server;
-  if (!server.providerId) throw new Error(`Serveur ${server.name} sans identifiant fournisseur`);
   let ip = server.ip;
-  for (let i = 0; i < 60 && !ip; i++) {
-    const remote = await providers.cloud.getServer(server.providerId, server.zone);
-    if (remote.state === "error")
-      throw new Error(`Le fournisseur signale une erreur sur ${server.name}`);
-    if (remote.state === "running" && remote.ip) ip = remote.ip;
-    else await log.info(`Instance ${remote.state}, nouvelle vérification…`);
+  if (!ip) {
+    if (!server.providerId)
+      throw new Error(`Serveur ${server.name} sans adresse IP ni identifiant fournisseur`);
+    for (let i = 0; i < 60 && !ip; i++) {
+      const remote = await providers.cloud.getServer(server.providerId, server.zone);
+      if (remote.state === "error")
+        throw new Error(`Le fournisseur signale une erreur sur ${server.name}`);
+      if (remote.state === "running" && remote.ip) ip = remote.ip;
+      else await log.info(`Instance ${remote.state}, nouvelle vérification…`);
+    }
+    if (!ip) throw new Error(`Le serveur ${server.name} n'a pas obtenu d'adresse IP à temps`);
+    await log.info(`Adresse IP ${ip} attribuée.`);
   }
-  if (!ip) throw new Error(`Le serveur ${server.name} n'a pas obtenu d'adresse IP à temps`);
-  const withIp = await prisma.server.update({ where: { id: server.id }, data: { ip } });
-  await log.info(`Adresse IP ${ip} attribuée. Attente de SSH et de Caddy (cloud-init)…`);
+  const withIp = await prisma.server.update({
+    where: { id: server.id },
+    data: { ip, status: "bootstrapping" },
+  });
+  await log.info(`Attente de SSH et de Caddy sur ${ip} (script d'installation)…`);
   await providers.agent.waitReady(serverRef(withIp), 10 * 60 * 1000);
   const metrics = await providers.agent.collectMetrics(serverRef(withIp));
   await log.success(`Serveur ${withIp.name} prêt`);

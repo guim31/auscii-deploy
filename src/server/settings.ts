@@ -17,6 +17,8 @@ export type Settings = {
   defaultOffer: string;
   defaultZone: string;
   agencyName: string;
+  /** Public half of the pilot's SSH key, shown in the UI and embedded in the bootstrap script. */
+  sshPublicKey: string;
   gandiContact: {
     organizationId: string;
     email: string;
@@ -31,6 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultOffer: "DEV1-S",
   defaultZone: "fr-par-1",
   agencyName: "AUSCII",
+  sshPublicKey: "",
   gandiContact: { organizationId: "", email: "" },
   capacity: {
     diskUsedPctMax: 80,

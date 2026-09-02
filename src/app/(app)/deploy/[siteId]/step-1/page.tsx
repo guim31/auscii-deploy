@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/session";
 import { placementForSite } from "@/server/sites";
+import { getSettings } from "@/server/settings";
 import { DomainStep, type PlacementView } from "@/components/wizard/domain-step";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,10 @@ export default async function Step1Page({ params }: { params: Promise<{ siteId: 
   if (site.status !== "draft" && site.status !== "error") redirect(`/deploy/${siteId}/step-2`);
 
   const placement = await placementForSite(siteId);
+  const settings = await getSettings();
+  const gandiConfigured =
+    settings.demoMode ||
+    Boolean(await prisma.integration.findUnique({ where: { provider: "gandi" } }));
   const view: PlacementView =
     placement.kind === "existing"
       ? {
@@ -38,6 +43,7 @@ export default async function Step1Page({ params }: { params: Promise<{ siteId: 
     <DomainStep
       siteId={site.id}
       isAdmin={user.role === "admin"}
+      gandiConfigured={gandiConfigured}
       placement={view}
       initial={{
         clientName: site.clientName,

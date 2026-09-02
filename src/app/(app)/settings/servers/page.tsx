@@ -5,6 +5,7 @@ import { evaluateServer } from "@/server/capacity";
 import { getProviders, type ServerMetrics } from "@/server/providers";
 import { PageHeader } from "@/components/app/page-header";
 import { ServersTable, type ServerRow } from "@/components/settings/servers-table";
+import { bootstrapScript } from "@/server/deploy/bootstrap";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,10 @@ export default async function ServersPage() {
       createdAt: s.createdAt.toISOString(),
     };
   });
+  const script = bootstrapScript({
+    sshPublicKey: settings.sshPublicKey || "ssh-ed25519 CLE-PUBLIQUE-A-GENERER auscii-deploy",
+    acmeEmail: settings.gandiContact.email || `admin@${settings.techDomain}`,
+  });
   return (
     <>
       <PageHeader
@@ -60,6 +65,9 @@ export default async function ServersPage() {
       />
       <ServersTable
         servers={rows}
+        bootstrap={script}
+        sshReady={Boolean(settings.sshPublicKey)}
+        demo={settings.demoMode}
         offers={offers}
         defaultOffer={settings.defaultOffer}
         isAdmin={user.role === "admin"}

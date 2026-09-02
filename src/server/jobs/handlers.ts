@@ -11,6 +11,7 @@ import {
 } from "./pipelines";
 import { checkAllCertificates, collectAllMetrics, orderStandaloneServer } from "./maintenance";
 import { generateAiReport, type AiReportPayload } from "./ai-report";
+import { runServerBootstrap, type ServerBootstrapPayload } from "./steps/register-server";
 
 const workOptions = { batchSize: 1, pollingIntervalSeconds: 1 } as const;
 
@@ -48,6 +49,9 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   await boss.work<{ offerId?: string }>(QUEUES.serverOrder, workOptions, async (jobs) => {
     await orderStandaloneServer(one(jobs).offerId);
   });
+  await boss.work<ServerBootstrapPayload>(QUEUES.serverBootstrap, workOptions, async (jobs) =>
+    runServerBootstrap(one(jobs)),
+  );
   await boss.work(QUEUES.serverHealth, { ...workOptions, pollingIntervalSeconds: 10 }, async () => {
     await collectAllMetrics();
   });

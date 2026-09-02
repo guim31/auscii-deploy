@@ -11,6 +11,7 @@ export const QUEUES = {
   promote: "site.promote",
   rollback: "site.rollback",
   serverOrder: "server.order",
+  serverBootstrap: "server.bootstrap",
   serverHealth: "server.health",
   sslCheck: "ssl.check",
   aiReport: "release.aiReport",

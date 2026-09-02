@@ -157,6 +157,8 @@ model Server {
   providerId   String?
   ip           String?
   sshUser      String       @default("deploy")
+  sshPort      Int          @default(22)
+  sshHostKey   String?
   status       ServerStatus @default(ordering)
   offer        String
   zone         String       @default("fr-par-1")

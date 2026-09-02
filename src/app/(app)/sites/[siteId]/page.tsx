@@ -34,6 +34,9 @@ import { formatBytes } from "@/server/capacity";
 import { formatDate, formatDateTime, daysUntil } from "@/lib/format";
 import { prisma } from "@/server/db";
 import type { StepState } from "@/server/jobs/pipeline";
+import { getSettings } from "@/server/settings";
+import { expectedDnsRecords } from "@/server/deploy/dns";
+import { DnsRecordsCard } from "@/components/sites/dns-records-card";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +53,11 @@ export default async function SitePage({
   const site = await getSiteDetail(siteId);
   if (!site) notFound();
   const ssl = site.sslChecks[0];
+  const settings = await getSettings();
+  const dnsRecords =
+    site.domainRecord && !site.domainRecord.dnsConfigured && site.server?.ip && !site.isDemo
+      ? expectedDnsRecords(site.domainRecord.fqdn, site.slug, site.server.ip, settings)
+      : null;
   const days = daysUntil(ssl?.expiresAt);
   const focus = focusId
     ? await prisma.deployment.findFirst({
@@ -168,6 +176,12 @@ export default async function SitePage({
           </CardContent>
         </Card>
       </div>
+
+      {dnsRecords && (
+        <div className="mb-6">
+          <DnsRecordsCard records={dnsRecords} />
+        </div>
+      )}
 
       {running && (
         <Card className="mb-6">

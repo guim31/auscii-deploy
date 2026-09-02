@@ -226,3 +226,114 @@ export async function deleteUserAction(userId: string): Promise<Result> {
   revalidatePath("/settings/users");
   return { ok: true };
 }
+
+// ---------- Servers registered by hand and SSH keys (phase 2) ----------
+
+const existingServerSchema = z.object({
+  name: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(/^[a-z0-9][a-z0-9-]*$/, "Nom : lettres minuscules, chiffres et tirets"),
+  ip: z.string().regex(/^(\d{1,3}\.){3}\d{1,3}$|^[0-9a-f:]+$/i, "Adresse IP invalide"),
+  sshPort: z.coerce.number().int().min(1).max(65535).default(22),
+  sshUser: z.string().min(1).max(32).default("deploy"),
+  vcpus: z.coerce.number().int().min(1).max(64).default(2),
+  offer: z.string().min(1).max(40).default("manuel"),
+});
+
+export async function addExistingServerAction(
+  input: Record<string, string>,
+): Promise<Result<{ serverId: string }>> {
+  const user = await admin();
+  if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  const parsed = existingServerSchema.safeParse(input);
+  if (!parsed.success)
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Champs invalides" };
+  const settings = await getSettings();
+  if (!settings.demoMode && !settings.sshPublicKey) {
+    return { ok: false, error: "Générez d'abord la clé SSH du pilote (Intégrations > SSH)." };
+  }
+  const exists = await prisma.server.findUnique({ where: { name: parsed.data.name } });
+  if (exists) return { ok: false, error: "Un serveur porte déjà ce nom" };
+  const { registerExistingServer } = await import("../jobs/steps/register-server");
+  const server = await registerExistingServer({ ...parsed.data, zone: settings.defaultZone });
+  await audit(user, "server.register", { target: server.name, details: { ip: parsed.data.ip } });
+  revalidatePath("/settings/servers");
+  return { ok: true, serverId: server.id };
+}
+
+export async function retestServerAction(serverId: string, forgetHostKey = false): Promise<Result> {
+  const user = await admin();
+  if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  const server = await prisma.server.findUnique({ where: { id: serverId } });
+  if (!server) return { ok: false, error: "Serveur introuvable" };
+  const { retestServer } = await import("../jobs/steps/register-server");
+  await retestServer(serverId, forgetHostKey);
+  await audit(user, "server.retest", { target: server.name, details: { forgetHostKey } });
+  revalidatePath("/settings/servers");
+  return { ok: true };
+}
+
+export async function generateSshKeysAction(): Promise<
+  Result<{ publicKey: string; fingerprint: string }>
+> {
+  const user = await admin();
+  if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  const { generateSshKeyPair } = await import("../deploy/ssh-keys");
+  const pair = generateSshKeyPair(`auscii-deploy ${new Date().toISOString().slice(0, 10)}`);
+  const encrypted = encryptJson(
+    { privateKey: pair.privateKey, publicKey: pair.publicKey },
+    env().APP_ENCRYPTION_KEY,
+  );
+  await prisma.integration.upsert({
+    where: { provider: "ssh" },
+    create: { provider: "ssh", encrypted },
+    update: { encrypted, lastTestAt: null, lastTestOk: null },
+  });
+  await setSetting("sshPublicKey", pair.publicKey);
+  await audit(user, "ssh.generateKeys", { details: { fingerprint: pair.fingerprint } });
+  revalidatePath("/settings/integrations");
+  revalidatePath("/settings/servers");
+  return { ok: true, publicKey: pair.publicKey, fingerprint: pair.fingerprint };
+}
+
+export async function importSshKeyAction(
+  privateKey: string,
+): Promise<Result<{ publicKey: string; fingerprint: string }>> {
+  const user = await admin();
+  if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  const { inspectPrivateKey } = await import("../deploy/ssh-keys");
+  let info: { publicKey: string; fingerprint: string };
+  try {
+    info = inspectPrivateKey(privateKey.trim() + "\n");
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Clé illisible" };
+  }
+  const encrypted = encryptJson(
+    { privateKey: privateKey.trim() + "\n", publicKey: info.publicKey },
+    env().APP_ENCRYPTION_KEY,
+  );
+  await prisma.integration.upsert({
+    where: { provider: "ssh" },
+    create: { provider: "ssh", encrypted },
+    update: { encrypted, lastTestAt: null, lastTestOk: null },
+  });
+  await setSetting("sshPublicKey", info.publicKey);
+  await audit(user, "ssh.importKey", { details: { fingerprint: info.fingerprint } });
+  revalidatePath("/settings/integrations");
+  revalidatePath("/settings/servers");
+  return { ok: true, ...info };
+}
+
+/** Script to run as root on a fresh Debian 12 server before adding it to the tool. */
+export async function bootstrapScriptAction(): Promise<Result<{ script: string; ready: boolean }>> {
+  if (!(await getCurrentUser())) return { ok: false, error: "Non authentifié" };
+  const settings = await getSettings();
+  const { bootstrapScript } = await import("../deploy/bootstrap");
+  const script = bootstrapScript({
+    sshPublicKey: settings.sshPublicKey || "ssh-ed25519 CLE-PUBLIQUE-A-GENERER auscii-deploy",
+    acmeEmail: settings.gandiContact.email || `admin@${settings.techDomain}`,
+  });
+  return { ok: true, script, ready: Boolean(settings.sshPublicKey) };
+}
