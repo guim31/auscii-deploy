@@ -9,6 +9,7 @@ import { captureScreenshot, checkTls, deployRelease, productionHosts } from "./s
 import { pickServer } from "../capacity";
 import { ProviderNotConfiguredError } from "../providers/types";
 import { describeRecords, expectedDnsRecords } from "../deploy/dns";
+import { releaseDir } from "../releases/paths";
 
 export type ProvisionPayload = {
   deploymentId: string;
@@ -190,7 +191,7 @@ const stagingSteps: StepDefinition[] = [
       if (!ctx.site.gitRepo) return { skipped: "pas de dépôt GitHub, versionnement local" };
       const { commitSha } = await ctx.providers.git.pushRelease({
         repo: ctx.site.gitRepo,
-        releaseDir: `releases/${release.id}`,
+        releaseDir: releaseDir(release.id),
         branch: "staging",
         message: `Release v${release.version}`,
       });
@@ -372,6 +373,21 @@ const rollbackSteps: StepDefinition[] = [
         data: { liveReleaseId: release.id, status: "live", lastPublishedAt: new Date() },
       });
       await ctx.log.success(`Version ${release.version} remise en ligne`);
+      if (ctx.site.gitRepo && release.commitSha) {
+        const tag = `prod-${new Date()
+          .toISOString()
+          .slice(0, 16)
+          .replace(/[-:T]/g, "")
+          .replace(/(\d{8})(\d{4})/, "$1-$2")}-retour`;
+        const res = await ctx.providers.git.promote({
+          repo: ctx.site.gitRepo,
+          tag,
+          commitSha: release.commitSha,
+        });
+        await ctx.log.info(
+          `Branche production replacée sur ${res.commitSha.slice(0, 7)} (tag ${res.tag})`,
+        );
+      }
     },
   },
   {

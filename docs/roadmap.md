@@ -47,6 +47,11 @@ Chaque phase est une pull request testable indépendamment.
 - Suppression d'un serveur vide depuis l'outil (admin, confirmation par saisie du nom, audit, file `server.delete`).
 - Contrôle de la clé SSH du pilote avant toute commande.
 
+## Ce que la phase 5 contient
+
+- `GitHubProvider` réel : authentification GitHub App (JWT puis jeton d'installation en cache), dépôt privé par site idempotent, commits sur `staging` via le binaire `git`, `production` et tag à la publication, retour arrière qui replace `production`, test de l'App.
+- Le jeton ne reste jamais dans la configuration Git locale ni dans les logs.
+
 ## Prérequis à réunir avant la phase 2
 
 - Un domaine technique acheté chez Gandi (ex. `auscii.site`) et saisi dans Paramètres > Agence.

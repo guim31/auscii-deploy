@@ -63,6 +63,21 @@ Tant que l'intégration Gandi n'est pas configurée, le wizard force « domaine 
 4. Suppression : Paramètres > Serveurs > « Supprimer » sur un serveur sans site (admin, saisie du nom pour confirmer). L'instance, ses volumes et son IP sont supprimés ; la facturation s'arrête. Un serveur ajouté à la main est seulement retiré de la liste.
 5. Le pare-feu `ufw` du script d'installation limite l'exposition aux ports 22, 80 et 443 ; le groupe de sécurité Scaleway par défaut est conservé.
 
+## GitHub (phase 5)
+
+1. Créer l'organisation GitHub (ex. `auscii`) si ce n'est pas fait.
+2. Organisation > Settings > Developer settings > GitHub Apps > New GitHub App : nom « auscii-deploy », webhook désactivé, permissions de dépôt **Contents : Read and write**, **Administration : Read and write**, **Metadata : Read-only**, « Only on this account ». Noter l'**App ID**, générer et télécharger une **clé privée** (PEM).
+3. Installer l'App sur l'organisation (tous les dépôts). L'**Installation ID** est le nombre à la fin de l'URL de la page d'installation (`/settings/installations/<id>`).
+4. Paramètres > Intégrations > GitHub : organisation, App ID, Installation ID, clé privée, puis « Tester » : l'outil affiche l'App et le nombre de dépôts accessibles.
+5. Chaque site provisionné reçoit un dépôt privé `<org>/<slug>`. Chaque zip déposé devient un commit sur `staging` ; la publication place `production` sur ce commit et pose un tag `prod-<date>` ; un retour arrière replace `production` sur l'ancien commit avec un tag `-retour`. Les copies de travail vivent dans `DATA_DIR/git/`.
+
+## Checklist de validation de la phase 5
+
+1. Intégration GitHub testée avec succès.
+2. Provisioning d'un site : dépôt privé créé dans l'organisation.
+3. Dépôt d'un zip puis préproduction : commit visible sur `staging`.
+4. Publication : branche `production` et tag visibles ; retour arrière : `production` recule et un tag `-retour` apparaît.
+
 ## Checklist de validation de la phase 4
 
 1. Clé IAM testée avec succès depuis l'outil.

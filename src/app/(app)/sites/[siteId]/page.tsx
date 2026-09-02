@@ -167,11 +167,25 @@ export default async function SitePage({
           <CardContent className="px-4 text-sm">
             {site.gitRepo ? (
               <>
-                <div className="font-medium">{site.gitRepo}</div>
-                <div className="text-muted-foreground text-xs">staging → production</div>
+                {site.isDemo ? (
+                  <div className="font-medium">{site.gitRepo}</div>
+                ) : (
+                  <a
+                    href={`https://github.com/${site.gitRepo}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium hover:underline"
+                  >
+                    {site.gitRepo}
+                  </a>
+                )}
+                <div className="text-muted-foreground text-xs">
+                  {site.releases.find((r) => r.id === site.liveReleaseId)?.gitTag ??
+                    "staging → production"}
+                </div>
               </>
             ) : (
-              "—"
+              <span className="text-muted-foreground">Versionnement local</span>
             )}
           </CardContent>
         </Card>

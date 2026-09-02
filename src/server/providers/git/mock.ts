@@ -29,14 +29,15 @@ export class MockGitProvider implements GitProvider {
     return { commitSha };
   }
 
-  async promote(input: { repo: string; tag: string }) {
+  async promote(input: { repo: string; tag: string; commitSha?: string }) {
     await sleep(900);
     const repo = repos.get(input.repo);
     if (!repo) throw new Error(`Dépôt introuvable : ${input.repo}`);
-    if (!repo.branches.staging) throw new Error("Aucune version en préproduction à publier");
-    repo.branches.production = repo.branches.staging;
+    const target = input.commitSha ?? repo.branches.staging;
+    if (!target) throw new Error("Aucune version en préproduction à publier");
+    repo.branches.production = target;
     repo.tags.push(input.tag);
-    return { commitSha: repo.branches.staging, tag: input.tag };
+    return { commitSha: target, tag: input.tag };
   }
 
   /** Test helper. */

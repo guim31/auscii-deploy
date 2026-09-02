@@ -113,8 +113,12 @@ export interface GitProvider {
     branch: GitBranch;
     message: string;
   }): Promise<{ commitSha: string }>;
-  /** Merges staging into production and tags the result. */
-  promote(input: { repo: string; tag: string }): Promise<{ commitSha: string; tag: string }>;
+  /** Moves production to the staging head (or to commitSha) and tags the result. */
+  promote(input: {
+    repo: string;
+    tag: string;
+    commitSha?: string;
+  }): Promise<{ commitSha: string; tag: string }>;
 }
 
 // ---------- Mail (Resend) ----------
