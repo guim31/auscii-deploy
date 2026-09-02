@@ -37,6 +37,14 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
     defaultZone: settings.defaultZone,
     gandiOrganizationId: settings.gandiContact.organizationId,
     gandiEmail: settings.gandiContact.email,
+    gandiOrgName: settings.gandiContact.orgName,
+    gandiGivenName: settings.gandiContact.givenName,
+    gandiFamilyName: settings.gandiContact.familyName,
+    gandiPhone: settings.gandiContact.phone,
+    gandiStreet: settings.gandiContact.street,
+    gandiZip: settings.gandiContact.zip,
+    gandiCity: settings.gandiContact.city,
+    gandiCountry: settings.gandiContact.country,
     diskUsedPctMax: String(settings.capacity.diskUsedPctMax),
     ramUsedPctMax: String(settings.capacity.ramUsedPctMax),
     loadPerVcpuMax: String(settings.capacity.loadPerVcpuMax),
@@ -127,6 +135,68 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
             type="email"
             value={values.gandiEmail}
             onChange={set("gandiEmail")}
+          />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Propriétaire des domaines (contact Gandi)</CardTitle>
+          <CardDescription>
+            L'agence est le propriétaire légal des domaines achetés. Ces coordonnées sont transmises
+            à Gandi à chaque achat ; tous les champs sont obligatoires pour acheter.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <Field
+            id="gandiOrgName"
+            label="Raison sociale"
+            value={values.gandiOrgName}
+            onChange={set("gandiOrgName")}
+          />
+          <Field
+            id="gandiPhone"
+            label="Téléphone"
+            placeholder="+33.612345678"
+            value={values.gandiPhone}
+            onChange={set("gandiPhone")}
+            hint="Format international avec un point après l'indicatif"
+          />
+          <Field
+            id="gandiGivenName"
+            label="Prénom du contact"
+            value={values.gandiGivenName}
+            onChange={set("gandiGivenName")}
+          />
+          <Field
+            id="gandiFamilyName"
+            label="Nom du contact"
+            value={values.gandiFamilyName}
+            onChange={set("gandiFamilyName")}
+          />
+          <Field
+            id="gandiStreet"
+            label="Adresse"
+            value={values.gandiStreet}
+            onChange={set("gandiStreet")}
+          />
+          <Field
+            id="gandiZip"
+            label="Code postal"
+            value={values.gandiZip}
+            onChange={set("gandiZip")}
+          />
+          <Field
+            id="gandiCity"
+            label="Ville"
+            value={values.gandiCity}
+            onChange={set("gandiCity")}
+          />
+          <Field
+            id="gandiCountry"
+            label="Pays (code à 2 lettres)"
+            value={values.gandiCountry}
+            onChange={set("gandiCountry")}
+            maxLength={2}
           />
         </CardContent>
       </Card>

@@ -19,9 +19,18 @@ export type Settings = {
   agencyName: string;
   /** Public half of the pilot's SSH key, shown in the UI and embedded in the bootstrap script. */
   sshPublicKey: string;
+  /** Legal owner of purchased domains: the agency. */
   gandiContact: {
     organizationId: string;
     email: string;
+    orgName: string;
+    givenName: string;
+    familyName: string;
+    phone: string;
+    street: string;
+    zip: string;
+    city: string;
+    country: string;
   };
   capacity: CapacityThresholds;
 };
@@ -34,7 +43,18 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultZone: "fr-par-1",
   agencyName: "AUSCII",
   sshPublicKey: "",
-  gandiContact: { organizationId: "", email: "" },
+  gandiContact: {
+    organizationId: "",
+    email: "",
+    orgName: "",
+    givenName: "",
+    familyName: "",
+    phone: "",
+    street: "",
+    zip: "",
+    city: "",
+    country: "FR",
+  },
   capacity: {
     diskUsedPctMax: 80,
     ramUsedPctMax: 80,

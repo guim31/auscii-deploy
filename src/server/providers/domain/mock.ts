@@ -52,7 +52,8 @@ export class MockDomainProvider implements DomainProvider {
 
   async register(fqdn: string, contact: DomainContact): Promise<DomainOrder> {
     await sleep(1200);
-    if (!contact.email) return { orderId: "", status: "failed", message: "Contact Gandi manquant" };
+    // The demo never depends on settings: any contact, even empty, is accepted.
+    void contact;
     const orderId = `mock-order-${hashInt(fqdn, 100000)}`;
     orders.set(orderId, { fqdn, createdAt: Date.now() });
     return { orderId, status: "pending", message: "Commande enregistrée chez Gandi" };

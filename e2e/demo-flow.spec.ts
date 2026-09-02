@@ -58,9 +58,16 @@ test("full wizard: domain, provisioning, upload, staging, production", async ({ 
   await page.getByRole("button", { name: "Commencer" }).click();
   await expect(page).toHaveURL(/step-1/);
 
-  const domain = `fleuriste-rose-${Date.now().toString(36)}.fr`;
-  await page.getByLabel("Nom de domaine souhaité").fill(domain);
-  await page.getByRole("button", { name: "Vérifier" }).click();
+  // The demo registrar marks about one name in ten as taken: try a few candidates.
+  let domain = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    domain = `fleuriste-rose-${Date.now().toString(36)}${attempt}.fr`;
+    await page.getByLabel("Nom de domaine souhaité").fill(domain);
+    await page.getByRole("button", { name: "Vérifier" }).click();
+    const check = page.getByTestId("domain-check");
+    await expect(check).toContainText(domain);
+    if ((await check.textContent())?.includes("est disponible")) break;
+  }
   await expect(page.getByTestId("domain-check")).toContainText("est disponible");
   await page.getByLabel("Email de réception du formulaire de contact").fill("rose@example.com");
   await page.getByTestId("confirm-purchase").check();

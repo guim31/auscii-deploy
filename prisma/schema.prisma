@@ -214,6 +214,8 @@ model Domain {
   currency      String?
   expiresAt     DateTime?
   dnsConfigured Boolean           @default(false)
+  autorenew     Boolean           @default(false)
+  lastCheckedAt DateTime?
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 }

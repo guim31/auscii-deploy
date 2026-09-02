@@ -75,16 +75,46 @@ export async function testIntegrationAction(
   const settings = await getSettings();
   const row = await prisma.integration.findUnique({ where: { provider } });
   if (!row) return { ok: false, error: "Aucune clé enregistrée" };
-  // Real connectivity tests arrive with each real provider (phases 2 to 7).
-  const message = settings.demoMode
-    ? "Mode démo : test simulé, clé enregistrée."
-    : "Clé enregistrée. Le test réel de connexion arrive avec l'intégration correspondante.";
+  if (settings.demoMode) {
+    await prisma.integration.update({
+      where: { provider },
+      data: { lastTestAt: new Date(), lastTestOk: true },
+    });
+    revalidatePath("/settings/integrations");
+    return { ok: true, message: "Mode démo : test simulé, clé enregistrée." };
+  }
+  let message: string;
+  let ok = true;
+  try {
+    if (provider === "gandi") {
+      const { loadCredentials } = await import("../providers");
+      const { GandiProvider } = await import("../providers/domain/gandi");
+      const creds = await loadCredentials("gandi");
+      const me = await new GandiProvider(creds).whoAmI();
+      const org = creds?.organizationId
+        ? me.organizations.find((o) => o.id === creds.organizationId)
+        : undefined;
+      const orgs = me.organizations.map((o) => `${o.name ?? o.id} (${o.id})`).join(", ");
+      if (creds?.organizationId && !org) {
+        ok = false;
+        message = `Jeton valide (${me.user}) mais l'organisation ${creds.organizationId} est introuvable. Organisations visibles : ${orgs || "aucune"}.`;
+      } else {
+        message = `Jeton valide (${me.user}). ${org ? `Organisation : ${org.name ?? org.id}.` : `Organisations visibles : ${orgs || "aucune"}.`}`;
+      }
+    } else {
+      message =
+        "Clé enregistrée. Le test réel de connexion arrive avec l'intégration correspondante.";
+    }
+  } catch (err) {
+    ok = false;
+    message = err instanceof Error ? err.message : "Test impossible";
+  }
   await prisma.integration.update({
     where: { provider },
-    data: { lastTestAt: new Date(), lastTestOk: settings.demoMode },
+    data: { lastTestAt: new Date(), lastTestOk: ok },
   });
   revalidatePath("/settings/integrations");
-  return { ok: true, message };
+  return ok ? { ok: true, message } : { ok: false, error: message };
 }
 
 const agencySchema = z.object({
@@ -102,7 +132,17 @@ const agencySchema = z.object({
   defaultOffer: z.string().min(1).max(30),
   defaultZone: z.string().min(1).max(30),
   gandiOrganizationId: z.string().max(120),
-  gandiEmail: z.string().max(120),
+  gandiEmail: z.string().email().or(z.literal("")),
+  gandiOrgName: z.string().max(120),
+  gandiGivenName: z.string().max(80),
+  gandiFamilyName: z.string().max(80),
+  gandiPhone: z
+    .string()
+    .regex(/^(\+\d{1,3}\.?\d{6,14})?$/, "Téléphone au format international, ex. +33.612345678"),
+  gandiStreet: z.string().max(200),
+  gandiZip: z.string().max(20),
+  gandiCity: z.string().max(80),
+  gandiCountry: z.string().regex(/^[A-Za-z]{2}$/, "Pays sur 2 lettres (FR)"),
   diskUsedPctMax: z.coerce.number().min(50).max(99),
   ramUsedPctMax: z.coerce.number().min(50).max(99),
   loadPerVcpuMax: z.coerce.number().min(0.2).max(4),
@@ -126,7 +166,18 @@ export async function saveAgencyAction(input: Record<string, string>): Promise<R
   await setSetting("previewSubdomain", d.previewSubdomain);
   await setSetting("defaultOffer", d.defaultOffer);
   await setSetting("defaultZone", d.defaultZone);
-  await setSetting("gandiContact", { organizationId: d.gandiOrganizationId, email: d.gandiEmail });
+  await setSetting("gandiContact", {
+    organizationId: d.gandiOrganizationId,
+    email: d.gandiEmail,
+    orgName: d.gandiOrgName,
+    givenName: d.gandiGivenName,
+    familyName: d.gandiFamilyName,
+    phone: d.gandiPhone,
+    street: d.gandiStreet,
+    zip: d.gandiZip,
+    city: d.gandiCity,
+    country: d.gandiCountry.toUpperCase(),
+  });
   const capacity: Settings["capacity"] = {
     ...current.capacity,
     diskUsedPctMax: d.diskUsedPctMax,

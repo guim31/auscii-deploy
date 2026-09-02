@@ -58,6 +58,8 @@ export default async function DashboardPage() {
           expiresAt: s.sslChecks[0].expiresAt?.toISOString() ?? null,
         }
       : null,
+    domainExpiresAt: s.domainRecord?.expiresAt?.toISOString() ?? null,
+    domainAutorenew: s.domainRecord?.autorenew ?? false,
     liveReleaseId: s.liveReleaseId,
     stagingReleaseId: s.stagingReleaseId,
     demo: s.isDemo,

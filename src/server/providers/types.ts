@@ -40,9 +40,19 @@ export type DnsRecord = {
   ttl?: number;
 };
 
+/** Legal owner of a purchased domain (the agency). */
 export type DomainContact = {
   organizationId?: string;
   email: string;
+  orgName?: string;
+  givenName?: string;
+  familyName?: string;
+  phone?: string;
+  street?: string;
+  zip?: string;
+  city?: string;
+  /** ISO 3166-1 alpha-2, e.g. FR */
+  country?: string;
 };
 
 export interface DomainProvider {

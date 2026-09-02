@@ -38,7 +38,8 @@ const FIELDS: Record<
 > = {
   gandi: {
     title: "Gandi",
-    description: "Achat des domaines et DNS (LiveDNS).",
+    description:
+      "Achat des domaines et DNS (LiveDNS). Jeton personnel (PAT) avec les droits « Voir et renouveler les domaines », « Acheter des domaines » et « Gérer les enregistrements LiveDNS ».",
     phase: "phase 3",
     fields: [
       { key: "apiKey", label: "Personal Access Token", secret: true },
