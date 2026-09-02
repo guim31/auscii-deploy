@@ -101,6 +101,12 @@ export async function testIntegrationAction(
       } else {
         message = `Jeton valide (${me.user}). ${org ? `Organisation : ${org.name ?? org.id}.` : `Organisations visibles : ${orgs || "aucune"}.`}`;
       }
+    } else if (provider === "scaleway") {
+      const { loadCredentials } = await import("../providers");
+      const { ScalewayProvider } = await import("../providers/cloud/scaleway");
+      const creds = await loadCredentials("scaleway");
+      const me = await new ScalewayProvider(creds).whoAmI(settings.defaultZone);
+      message = `Clé valide : ${me.offers} offre(s) disponibles en ${settings.defaultZone}. ${me.project ? `Projet : ${me.project}.` : (me.warning ?? "")}`;
     } else {
       message =
         "Clé enregistrée. Le test réel de connexion arrive avec l'intégration correspondante.";
@@ -217,16 +223,27 @@ export async function refreshMetricsAction(): Promise<Result<{ count: number }>>
   return { ok: true, count };
 }
 
-export async function retireServerAction(serverId: string): Promise<Result> {
+export async function deleteServerAction(serverId: string, confirmName: string): Promise<Result> {
   const user = await admin();
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
-  const sites = await prisma.site.count({
-    where: { serverId, status: { notIn: ["draft", "error"] } },
+  const server = await prisma.server.findUnique({ where: { id: serverId } });
+  if (!server) return { ok: false, error: "Serveur introuvable" };
+  if (confirmName.trim() !== server.name)
+    return { ok: false, error: "Le nom saisi ne correspond pas" };
+  const { requestServerDeletion } = await import("../jobs/steps/delete-server");
+  try {
+    await requestServerDeletion(serverId);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Suppression impossible" };
+  }
+  await audit(user, "server.delete", {
+    target: server.name,
+    amount: server.monthlyPrice ?? undefined,
+    currency: "EUR",
+    details: { provider: server.provider, providerId: server.providerId, ip: server.ip },
   });
-  if (sites > 0) return { ok: false, error: "Ce serveur héberge encore des sites" };
-  await prisma.server.update({ where: { id: serverId }, data: { status: "retired" } });
-  await audit(user, "server.retire", { target: serverId });
   revalidatePath("/settings/servers");
+  revalidatePath("/");
   return { ok: true };
 }
 

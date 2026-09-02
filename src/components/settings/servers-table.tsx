@@ -21,8 +21,8 @@ import {
   orderServerAction,
   refreshMetricsAction,
   retestServerAction,
-  retireServerAction,
 } from "@/server/actions/settings";
+import { DeleteServerDialog } from "./delete-server-dialog";
 import { AddServerDialog } from "./add-server-dialog";
 import type { CapacityVerdict } from "@/server/capacity";
 import type { ServerMetrics } from "@/server/providers/types";
@@ -34,6 +34,7 @@ export type ServerRow = {
   id: string;
   name: string;
   status: string;
+  provider: string;
   ip: string | null;
   offer: string;
   zone: string;
@@ -52,6 +53,7 @@ const STATUS: Record<
   ordering: { label: "Commande", variant: "warning" },
   bootstrapping: { label: "Installation", variant: "warning" },
   error: { label: "Erreur", variant: "destructive" },
+  retiring: { label: "Suppression", variant: "warning" },
   retired: { label: "Retiré", variant: "outline" },
 };
 
@@ -118,15 +120,6 @@ export function ServersTable({
       if (!res.ok) toast.error(res.error);
       else toast.success("Vérification relancée");
       setTimeout(() => router.refresh(), 1500);
-    });
-  }
-
-  function retire(id: string) {
-    startTransition(async () => {
-      const res = await retireServerAction(id);
-      if (!res.ok) toast.error(res.error);
-      else toast.success("Serveur retiré");
-      router.refresh();
     });
   }
 
@@ -222,16 +215,21 @@ export function ServersTable({
                       )}
                     </span>
                   )}
-                  {isAdmin && s.status !== "retired" && s.sitesCount === 0 && (
-                    <button
-                      type="button"
-                      className="underline"
-                      onClick={() => retire(s.id)}
-                      disabled={pending}
-                    >
-                      Retirer
-                    </button>
-                  )}
+                  {isAdmin &&
+                    s.status !== "retired" &&
+                    s.status !== "retiring" &&
+                    s.sitesCount === 0 && (
+                      <DeleteServerDialog
+                        server={{
+                          id: s.id,
+                          name: s.name,
+                          ip: s.ip,
+                          offer: s.offer,
+                          provider: s.provider,
+                          monthlyPrice: s.monthlyPrice,
+                        }}
+                      />
+                    )}
                 </div>
               </CardContent>
             </Card>

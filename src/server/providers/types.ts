@@ -83,6 +83,8 @@ export type CloudServer = {
   zone: string;
   state: "starting" | "running" | "stopped" | "error";
   ip?: string;
+  /** Provider resources attached to the instance (IP, volumes), kept for deletion. */
+  metadata?: Record<string, unknown>;
 };
 
 export interface CloudProvider {
@@ -95,7 +97,7 @@ export interface CloudProvider {
     cloudInit: string;
   }): Promise<CloudServer>;
   getServer(providerId: string, zone: string): Promise<CloudServer>;
-  deleteServer(providerId: string, zone: string): Promise<void>;
+  deleteServer(providerId: string, zone: string, metadata?: Record<string, unknown>): Promise<void>;
 }
 
 // ---------- Git (GitHub) ----------

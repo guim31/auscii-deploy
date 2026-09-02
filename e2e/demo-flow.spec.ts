@@ -150,4 +150,12 @@ test("SSH keys and manual server registration (demo)", async ({ page }) => {
   await expect(page.locator("div", { hasText: name }).getByText("Prêt").first()).toBeVisible({
     timeout: 30_000,
   });
+
+  // Deleting an empty server asks for its name, then retires it.
+  await page.getByTestId(`delete-server-${name}`).click();
+  await page.getByLabel("Saisissez le nom du serveur pour confirmer").fill(name);
+  await page.getByTestId("confirm-delete-server").click();
+  await expect(page.locator("div", { hasText: name }).getByText("Retiré").first()).toBeVisible({
+    timeout: 30_000,
+  });
 });

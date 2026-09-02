@@ -50,7 +50,11 @@ export class MockCloudProvider implements CloudProvider {
     return s;
   }
 
-  async deleteServer(providerId: string): Promise<void> {
+  async deleteServer(
+    providerId: string,
+    _zone?: string,
+    _metadata?: Record<string, unknown>,
+  ): Promise<void> {
     await sleep(500);
     servers.delete(providerId);
   }

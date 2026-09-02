@@ -12,6 +12,7 @@ enum ServerStatus {
   bootstrapping
   ready
   error
+  retiring
   retired
 }
 
@@ -159,6 +160,7 @@ model Server {
   sshUser      String       @default("deploy")
   sshPort      Int          @default(22)
   sshHostKey   String?
+  providerData Json?
   status       ServerStatus @default(ordering)
   offer        String
   zone         String       @default("fr-par-1")

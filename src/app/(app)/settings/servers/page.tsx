@@ -33,6 +33,7 @@ export default async function ServersPage() {
       id: s.id,
       name: s.name,
       status: s.status,
+      provider: s.provider,
       ip: s.ip,
       offer: s.offer,
       zone: s.zone,

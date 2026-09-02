@@ -52,8 +52,9 @@ const FIELDS: Record<
   },
   scaleway: {
     title: "Scaleway",
-    description: "Commande des serveurs (Instances).",
-    phase: "phase 4",
+    description:
+      "Commande et suppression des serveurs (Instances). Clé API IAM avec la permission InstancesFullAccess sur le projet, et l'identifiant du projet (UUID).",
+    phase: "phase 4 (livrée)",
     fields: [
       { key: "secretKey", label: "Secret key", secret: true },
       { key: "projectId", label: "Project ID" },
