@@ -101,6 +101,12 @@ export async function testIntegrationAction(
       } else {
         message = `Jeton valide (${me.user}). ${org ? `Organisation : ${org.name ?? org.id}.` : `Organisations visibles : ${orgs || "aucune"}.`}`;
       }
+    } else if (provider === "github") {
+      const { loadCredentials } = await import("../providers");
+      const { GitHubProvider } = await import("../providers/git/github");
+      const creds = await loadCredentials("github");
+      const me = await new GitHubProvider(creds).whoAmI();
+      message = `App « ${me.app} » installée sur ${me.org} : ${me.repos} dépôt(s) accessibles.`;
     } else if (provider === "scaleway") {
       const { loadCredentials } = await import("../providers");
       const { ScalewayProvider } = await import("../providers/cloud/scaleway");
