@@ -17,6 +17,9 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# public/ est vide et non suivi par git : la créer garantit que la copie
+# vers l'image de l'application aboutit, avec ou sans fichier statique.
+RUN mkdir -p public
 # Valeurs factices : le build ne se connecte à rien, il a seulement besoin d'un
 # environnement qui passe la validation de src/server/env.ts.
 ENV NEXT_TELEMETRY_DISABLED=1 \
@@ -36,8 +39,8 @@ RUN groupadd --system --gid 1001 auscii && \
 COPY --from=builder --chown=auscii:auscii /app/.next/standalone ./
 COPY --from=builder --chown=auscii:auscii /app/.next/static ./.next/static
 COPY --from=builder --chown=auscii:auscii /app/public ./public
-# Le client Prisma et son moteur ne sont pas toujours tracés par le build autonome.
-COPY --from=builder --chown=auscii:auscii /app/node_modules/.prisma/client ./node_modules/.prisma/client
+# Le client Prisma généré et son moteur WASM sont déjà tracés dans .next/standalone
+# (vérifié : node_modules/.pnpm/@prisma+client*/node_modules/.prisma/client).
 USER auscii
 EXPOSE 3000
 CMD ["node", "server.js"]
