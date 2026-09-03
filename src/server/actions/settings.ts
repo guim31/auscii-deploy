@@ -128,6 +128,12 @@ export async function testIntegrationAction(
       } else {
         message = `Clé valide. Domaine d'envoi ${tech.name} vérifié.`;
       }
+    } else if (provider === "anthropic") {
+      const { loadCredentials } = await import("../providers");
+      const { AnthropicProvider } = await import("../providers/ai/anthropic");
+      const creds = await loadCredentials("anthropic");
+      const me = await new AnthropicProvider(creds).whoAmI();
+      message = `Clé valide. Modèle : ${me.displayName} (${me.model})${me.contextWindow ? `, contexte ${Math.round(me.contextWindow / 1000)}k tokens` : ""}.`;
     } else {
       message =
         "Clé enregistrée. Le test réel de connexion arrive avec l'intégration correspondante.";

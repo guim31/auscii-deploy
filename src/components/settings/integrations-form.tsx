@@ -89,11 +89,12 @@ const FIELDS: Record<
   },
   anthropic: {
     title: "Anthropic",
-    description: "Rapport d'analyse Claude à l'étape 3.",
-    phase: "phase 7",
+    description:
+      "Rapport de relecture Claude à l'étape 3 (SEO, accessibilité, contenu). Clé API de la console Anthropic ; le modèle est facultatif.",
+    phase: "phase 7 (livrée)",
     fields: [
       { key: "apiKey", label: "API key", secret: true },
-      { key: "model", label: "Modèle", placeholder: "claude-sonnet-5" },
+      { key: "model", label: "Modèle (facultatif)", placeholder: "claude-opus-5 par défaut" },
     ],
   },
   ssh: {

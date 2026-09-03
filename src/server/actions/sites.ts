@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { getCurrentUser } from "../session";
 import { audit } from "../audit";
@@ -21,6 +22,8 @@ import { analyzeSite, type Analysis } from "../releases/analyze";
 import { fixForms, listSiteFiles } from "../releases/fix-forms";
 import { releaseDir } from "../releases/paths";
 import { queueSubmissionMail } from "../jobs/mail";
+import { enqueue, QUEUES } from "../jobs/boss";
+import { aiReportRetryable } from "@/lib/ai-report";
 
 type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -260,6 +263,31 @@ export async function resendSubmissionAction(submissionId: string): Promise<Resu
   try {
     await queueSubmissionMail(submission.id);
     revalidatePath(`/sites/${submission.siteId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+/** Clears a failed or missing Claude report and queues a new one. */
+export async function retryAiReportAction(releaseId: string): Promise<Result> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Non authentifié" };
+  const release = await prisma.release.findUnique({
+    where: { id: releaseId },
+    select: { id: true, aiReport: true },
+  });
+  if (!release) return { ok: false, error: "Version introuvable" };
+  const current = release.aiReport as AiReport | null;
+  if (current && !aiReportRetryable(current.generatedBy))
+    return { ok: false, error: "Le rapport existe déjà." };
+  try {
+    await prisma.release.update({ where: { id: releaseId }, data: { aiReport: Prisma.DbNull } });
+    await enqueue(
+      QUEUES.aiReport,
+      { releaseId },
+      { singletonKey: `ai:${releaseId}:${Date.now()}` },
+    );
     return { ok: true };
   } catch (err) {
     return { ok: false, error: errorMessage(err) };

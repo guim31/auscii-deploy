@@ -11,7 +11,7 @@ Ce document sera complété au fil des phases. Il fixe dès maintenant les prér
 | Domaine technique | Un domaine dédié acheté chez Gandi (ex. `auscii.site`). `auscii.com` reste chez OVH avec les emails et n'est jamais modifié                     | Outil (`deploy.…`) et préproductions (`client.preview.…`) |
 | GitHub            | Une organisation AUSCII et une GitHub App installée dessus (permissions : contents et administration des dépôts). Aucun compte pour les gérants | Un repo par site                                          |
 | Resend            | Compte et clé API (accès complet). Le domaine d'envoi est le domaine technique, déclaré et vérifié depuis l'outil                               | Formulaires, alertes                                      |
-| Anthropic         | Clé API                                                                                                                                         | Rapport d'analyse du site                                 |
+| Anthropic         | Clé API (console.anthropic.com). Modèle `claude-opus-5` par défaut, modifiable dans Paramètres > Intégrations                                   | Rapport de relecture à l'étape 3                          |
 
 ## Pilote (hébergement de l'outil)
 
@@ -79,6 +79,19 @@ Tant que l'intégration Gandi n'est pas configurée, le wizard force « domaine 
 4. Paramètres > Agence > Email des alertes : destinataire des alertes (domaine qui expire sous 30 jours, HTTPS en échec, déploiement en erreur). Une alerte par sujet et par jour.
 5. Les messages des formulaires sont enregistrés avant tout envoi. En cas de panne Resend, le worker réessaie pendant plusieurs heures ; un message toujours « non transmis » sur la page du site peut être renvoyé d'un clic.
 6. Limite de débit des formulaires : 5 messages par site et par IP toutes les 10 minutes, en mémoire du processus `app` (suffisant pour un pilote à une instance).
+
+## Anthropic (phase 7)
+
+1. Sur console.anthropic.com : API Keys > Create Key. Copier la clé dans Paramètres > Intégrations > Anthropic, puis « Tester » : l'outil affiche le modèle utilisé et sa fenêtre de contexte. Le champ « Modèle » est facultatif (`claude-opus-5` par défaut).
+2. À chaque dépôt de zip, le worker envoie le texte des pages (40 pages et 80 000 caractères maximum) et les constats de l'analyse automatique, et reçoit un rapport JSON validé : résumé, SEO, accessibilité, contenu. Le rapport n'est jamais bloquant.
+3. Sans clé, l'étape 3 affiche « Rapport Claude non généré » ; après saisie de la clé, « Relancer l'analyse » régénère le rapport de la version en cours. Même bouton après une erreur (limite de débit, indisponibilité).
+4. Coût indicatif : un site vitrine de 10 pages représente quelques dizaines de milliers de tokens en entrée, soit quelques centimes par rapport.
+
+## Checklist de validation de la phase 7
+
+1. Intégration Anthropic testée avec succès.
+2. Dépôt d'un zip : rapport « Claude (claude-opus-5) » affiché à l'étape 3 en moins d'une minute, avec des constats propres au site.
+3. Clé retirée puis zip déposé : rapport « non généré » ; clé remise puis « Relancer l'analyse » : rapport réel.
 
 ## Checklist de validation de la phase 6
 
