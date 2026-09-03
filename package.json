@@ -24,6 +24,7 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "@better-auth/core": "1.7.2",
     "@prisma/client": "6.19.3",
     "better-auth": "^1.7.2",

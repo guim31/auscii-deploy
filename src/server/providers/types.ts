@@ -154,6 +154,8 @@ export type AiSiteInput = {
   clientName: string;
   files: { path: string; size: number }[];
   pages: { path: string; title?: string; text: string }[];
+  /** Findings of the automatic analysis, so the report completes them instead of repeating them. */
+  facts?: string[];
 };
 
 export interface AiProvider {

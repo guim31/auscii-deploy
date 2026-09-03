@@ -6,6 +6,7 @@ import {
   ArrowRightIcon,
   CheckCircle2Icon,
   WrenchIcon,
+  RefreshCwIcon,
   FileArchiveIcon,
   InfoIcon,
   Loader2Icon,
@@ -18,7 +19,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { fixFormsAction, getAiReportAction } from "@/server/actions/sites";
+import { fixFormsAction, getAiReportAction, retryAiReportAction } from "@/server/actions/sites";
+import { aiReportRetryable } from "@/lib/ai-report";
 import type { Analysis } from "@/server/releases/analyze";
 import type { AiReport, Finding } from "@/server/providers/types";
 import { formatBytes } from "@/server/capacity";
@@ -75,6 +77,7 @@ export function UploadStep({
   const [progress, setProgress] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [fixing, setFixing] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   // Bumped after an in-place fix so the preview iframe reloads.
   const [previewKey, setPreviewKey] = useState(0);
   // AI reports fetched after the initial render, keyed by release id.
@@ -149,6 +152,21 @@ export function UploadStep({
 
   const analysis = current?.analysis ?? null;
   const unwiredForms = analysis?.forms.filter((f) => !f.wired).length ?? 0;
+
+  async function retryReport() {
+    if (!current) return;
+    setRetrying(true);
+    const res = await retryAiReportAction(current.id);
+    setRetrying(false);
+    if (!res.ok) return void toast.error(res.error);
+    toast.success("Nouvelle analyse demandée");
+    setFetchedReports((prev) => {
+      const next = { ...prev };
+      delete next[current.id];
+      return next;
+    });
+    setCurrent({ ...current, aiReport: null });
+  }
 
   async function fixFormsNow() {
     if (!current) return;
@@ -293,6 +311,19 @@ export function UploadStep({
                     <FindingList title="SEO" items={aiReport.seo} />
                     <FindingList title="Accessibilité" items={aiReport.accessibility} />
                     <FindingList title="Contenu" items={aiReport.content} />
+                    {aiReportRetryable(aiReport.generatedBy) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="self-start"
+                        onClick={retryReport}
+                        disabled={retrying}
+                        data-testid="retry-ai-report"
+                      >
+                        {retrying ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}{" "}
+                        Relancer l'analyse
+                      </Button>
+                    )}
                   </>
                 ) : (
                   <div className="text-muted-foreground flex items-center gap-2 text-sm">

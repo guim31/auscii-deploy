@@ -2,7 +2,7 @@
 
 Outil web interne de l'agence AUSCII pour mettre en ligne, en quelques clics, les sites vitrine créés avec Claude Code : choix du domaine, dépôt d'un `.zip`, préproduction, publication.
 
-> État du projet : **phase 6 livrée**. Parcours complet en mode démo, déploiement réel SSH + Caddy, Gandi (domaines et DNS), Scaleway (serveurs), GitHub (un dépôt privé par site) et Resend (formulaires de contact fiables, alertes à l'agence). Anthropic arrive en phase 7. Checklists de validation dans `docs/runbook.md`.
+> État du projet : **phase 7 livrée**. Parcours complet en mode démo, déploiement réel SSH + Caddy, Gandi (domaines et DNS), Scaleway (serveurs), GitHub (un dépôt privé par site), Resend (formulaires de contact fiables, alertes à l'agence) et Claude (rapport de relecture à l'étape 3). Reste la phase 8 : Docker Compose du pilote et durcissement. Checklists de validation dans `docs/runbook.md`.
 
 ## Démarrer
 

@@ -43,7 +43,7 @@ Chaque intégration externe est une interface TypeScript avec deux implémentati
 | `CloudProvider`  | `listOffers()`, `createServer(spec, cloudInit)`, `getServer(id)`, `deleteServer(id)`                                | `ScalewayProvider`, `MockCloudProvider` |
 | `GitProvider`    | `createRepo(slug)`, `pushRelease(repo, files, branch)`, `promote(repo)`, `tag(repo, name)`                          | `GitHubProvider`, `MockGitProvider`     |
 | `MailProvider`   | `send(message)` ; `ResendProvider` gère aussi le domaine d'envoi (`ensureSendingDomain`, `verifyDomain`)            | `ResendProvider`, `MockMailProvider`    |
-| `AiProvider`     | `analyzeSite(files)`                                                                                                | `AnthropicProvider`, `MockAiProvider`   |
+| `AiProvider`     | `analyzeSite(input)` : pages, constats automatiques → rapport structuré ; `whoAmI()`                                | `AnthropicProvider`, `MockAiProvider`   |
 | `ServerAgent`    | `exec(cmd)`, `uploadArchive(tar, dest)`, `switchRelease(slug, ts)`, `writeCaddySite(slug, config)`, `reloadCaddy()` | `SshServerAgent`, `MockServerAgent`     |
 
 Les mocks reproduisent les délais et les états intermédiaires (commande de domaine « en attente », serveur « en cours de démarrage ») pour que la démo soit fidèle au réel.

@@ -11,7 +11,7 @@ Chaque phase est une pull request testable indépendamment.
 | 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention | Fait    |
 | 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                      | Fait    |
 | 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production            | Fait    |
-| 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                               | À faire |
+| 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                               | Fait    |
 | 8     | Docker Compose du pilote, runbook complet, durcissement, e2e                                                                | Installation reproductible sur un VPS neuf         | À faire |
 
 ## Ce que la phase 1 contient
@@ -59,6 +59,12 @@ Chaque phase est une pull request testable indépendamment.
 - Alertes à l'agence (`Alert`, une par sujet et par jour) : domaine qui expire sous 30 jours, contrôle HTTPS en échec, déploiement en erreur. Adresse dans Paramètres > Agence.
 - Bouton « Corriger les formulaires » à l'étape 3 : réécrit `action`, `method="post"` et ajoute le champ honeypot dans la release, puis relance l'analyse.
 - Les envois en préproduction sont marqués comme tels (en-tête `X-Site-Env`).
+
+## Ce que la phase 7 contient
+
+- `AnthropicProvider` réel via le SDK officiel : rapport structuré (résumé, SEO, accessibilité, contenu) demandé en sortie JSON validée, modèle `claude-opus-5` par défaut et modifiable dans les paramètres, budget d'entrée borné (40 pages, 80 000 caractères), test de la clé et du modèle.
+- Le rapport reçoit les constats de l'analyse automatique pour les compléter plutôt que les répéter. Un refus ou une erreur donne un rapport « indisponible » avec un bouton « Relancer l'analyse » à l'étape 3 ; sans clé, le rapport indique quoi configurer.
+- Erreurs traduites (clé invalide, modèle inconnu, limite de débit, indisponibilité), clé jamais journalisée.
 
 ## Prérequis à réunir avant la phase 2
 
