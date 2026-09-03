@@ -28,7 +28,8 @@ async function makeZip(): Promise<string> {
   );
   zip.addBuffer(
     Buffer.from(
-      `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Contact</title></head><body><form action="/__forms/contact" method="post"><input name="email"><button>Envoyer</button></form></body></html>`,
+      // Deliberately not wired to the built-in endpoint: step 3 offers to fix it.
+      `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Contact</title></head><body><form action="https://formspree.io/f/abc" method="get"><input name="email"><button>Envoyer</button></form></body></html>`,
     ),
     "fleuriste/contact.html",
   );
@@ -88,9 +89,12 @@ test("full wizard: domain, provisioning, upload, staging, production", async ({ 
   await expect(page.getByTestId("preview-frame")).toBeVisible();
   const frame = page.frameLocator('[data-testid="preview-frame"]');
   await expect(frame.getByRole("heading", { name: "Fleuriste Rose" })).toBeVisible();
+  await expect(page.getByTestId("analysis-issues")).toContainText("n'envoient pas vers");
+  await page.getByTestId("fix-forms").click();
   await expect(page.getByTestId("analysis-issues")).toContainText(
     "formulaire(s) de contact prêt(s)",
   );
+  await expect(page.getByTestId("fix-forms")).toHaveCount(0);
   await expect(
     page
       .getByText("Le site est prêt pour la préproduction", { exact: false })
@@ -119,12 +123,40 @@ test("site page lists versions and messages", async ({ page }) => {
   await expect(page.getByTestId("rollback-1")).toBeVisible();
 });
 
+test("an untransmitted message can be sent again", async ({ page }) => {
+  test.setTimeout(120_000);
+  await login(page);
+  // A previous run may already have sent the seeded message: start from fresh demo data.
+  await page.goto("/settings/agency");
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Réinitialiser la démo" }).click();
+  await expect(page.getByText("Démo réinitialisée")).toBeVisible({ timeout: 60_000 });
+  await page.goto("/");
+  await page.getByRole("link", { name: "Studio Lumen Photo" }).click();
+  await expect(page.getByText("Léa Fontaine")).toBeVisible();
+  await expect(page.getByTestId("submission-unsent")).toBeVisible();
+  await page.getByTestId("resend-submission").click();
+  await expect(page.getByText("Message remis en file d'envoi")).toBeVisible();
+  // The worker sends it through the mock provider within a few seconds.
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        return page.getByTestId("submission-unsent").count();
+      },
+      { timeout: 30_000, intervals: [1000, 2000, 3000] },
+    )
+    .toBe(0);
+});
+
 test("settings pages are reachable for the admin", async ({ page }) => {
   await login(page);
   await page.goto("/settings/servers");
   await expect(page.getByText("demo-01")).toBeVisible();
   await page.goto("/settings/integrations");
-  await expect(page.getByText("Gandi")).toBeVisible();
+  await expect(page.getByLabel("Personal Access Token")).toBeVisible();
+  await expect(page.getByTestId("resend-domain-panel")).toContainText("no-reply@");
+  await expect(page.getByRole("button", { name: "Configurer le domaine d'envoi" })).toBeDisabled();
   await page.goto("/settings/agency");
   await expect(page.getByLabel("Domaine technique")).toHaveValue(/auscii/);
   await page.goto("/settings/users");

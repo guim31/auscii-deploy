@@ -280,10 +280,29 @@ model FormSubmission {
   site      Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
   payload   Json
   fromIp    String?
+  /** "production" or "preview", from the X-Site-Env header set by Caddy. */
+  env       String    @default("production")
   emailedAt DateTime?
   createdAt DateTime  @default(now())
 
   @@index([siteId, createdAt])
+}
+
+/// Email alert sent to the agency, one per kind, key and day.
+model Alert {
+  id        String    @id @default(cuid())
+  kind      String
+  key       String
+  day       DateTime  @db.Date
+  subject   String
+  body      String
+  sentAt    DateTime?
+  error     String?
+  isDemo    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  @@unique([kind, key, day])
+  @@index([createdAt])
 }
 
 model SslCheck {

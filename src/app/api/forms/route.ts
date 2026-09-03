@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/db";
-import { getProviders } from "@/server/providers";
+import { queueSubmissionMail } from "@/server/jobs/mail";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,8 @@ function rateLimited(key: string): boolean {
 /**
  * Receives contact form submissions relayed by Caddy from every site
  * (/__forms/contact → this route with an X-Site header). Same-origin from the
- * visitor's point of view, so no CORS is involved.
+ * visitor's point of view, so no CORS is involved. The email itself is sent by
+ * the worker (mail.send queue) so a mail outage never loses a message.
  */
 export async function POST(request: Request) {
   const slug = request.headers.get("x-site");
@@ -50,26 +51,15 @@ export async function POST(request: Request) {
   if (Object.keys(clean).length === 0)
     return NextResponse.json({ error: "Message vide" }, { status: 400 });
 
+  const env = request.headers.get("x-site-env") === "preview" ? "preview" : "production";
   const submission = await prisma.formSubmission.create({
-    data: { siteId: site.id, payload: clean, fromIp: ip },
+    data: { siteId: site.id, payload: clean, fromIp: ip, env },
   });
-  const providers = await getProviders();
   try {
-    const text = Object.entries(clean)
-      .map(([k, v]) => `${k} : ${v}`)
-      .join("\n");
-    await providers.mail.send({
-      to: site.formsEmail,
-      subject: `[${site.clientName}] Nouveau message depuis le site`,
-      text: `${text}\n\n— Envoyé depuis ${site.domain ?? site.slug} via auscii-deploy`,
-      replyTo: clean.email,
-    });
-    await prisma.formSubmission.update({
-      where: { id: submission.id },
-      data: { emailedAt: new Date() },
-    });
+    await queueSubmissionMail(submission.id);
   } catch (err) {
-    console.error("[forms] mail failed", err);
+    // The submission is stored; the site page offers to resend it.
+    console.error("[forms] queue failed", err instanceof Error ? err.message : err);
   }
 
   const redirect = fields._redirect;

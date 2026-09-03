@@ -5,6 +5,7 @@ import { IntegrationsForm, type IntegrationState } from "@/components/settings/i
 import { INTEGRATIONS } from "@/server/providers";
 import { getSettings } from "@/server/settings";
 import { SshKeysCard } from "@/components/settings/ssh-keys-card";
+import { defaultSender } from "@/server/providers/mail/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,13 @@ export default async function IntegrationsPage() {
       <div className="mb-4">
         <SshKeysCard publicKey={settings.sshPublicKey} />
       </div>
-      <IntegrationsForm state={state} />
+      <IntegrationsForm
+        state={state}
+        mail={{
+          techDomain: settings.techDomain,
+          defaultSender: defaultSender(settings.agencyName, settings.techDomain),
+        }}
+      />
     </>
   );
 }

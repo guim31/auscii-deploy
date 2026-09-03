@@ -62,6 +62,7 @@ export function previewCaddyBlock({
 				header_up Host ${pilotHost}
 				header_up X-Site ${slug}
 				header_up X-Site-Env preview
+				header_up X-Forwarded-Host {host}
 			}
 		}
 		handle {

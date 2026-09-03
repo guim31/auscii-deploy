@@ -3,6 +3,8 @@ import { prisma } from "../db";
 import { getProviders, type Providers } from "../providers";
 import { getSettings, type Settings } from "../settings";
 import { createLogger, type Logger } from "./log";
+import { raiseAlert } from "./alerts";
+import { env } from "../env";
 
 export type StepStatus = "pending" | "running" | "done" | "skipped" | "failed";
 
@@ -31,6 +33,13 @@ export type StepDefinition = {
   label: string;
   /** Return "skipped" with a detail to record that the step was not needed. */
   run: (ctx: StepContext) => Promise<void | { skipped: string }>;
+};
+
+const KIND_LABEL: Record<string, string> = {
+  provision: "infrastructure",
+  deploy: "préproduction",
+  promote: "mise en production",
+  rollback: "retour arrière",
 };
 
 export class PipelineError extends Error {
@@ -129,6 +138,19 @@ export async function runPipeline(
         data: { status: "failed", error: message, finishedAt: new Date(), steps: steps as object },
       });
       await prisma.site.update({ where: { id: site.id }, data: { status: "error" } });
+      await raiseAlert({
+        kind: "deployment_failed",
+        key: deploymentId,
+        subject: `Déploiement en erreur : ${site.clientName}`,
+        body: [
+          `Le déploiement « ${KIND_LABEL[deployment.kind] ?? deployment.kind} » du site ${site.clientName} a échoué à l'étape « ${def.label} ».`,
+          "",
+          `Erreur : ${message}`,
+          "",
+          `Détails et relance : ${env().APP_URL}/sites/${site.id}?deployment=${deploymentId}`,
+        ].join("\n"),
+        isDemo: site.isDemo,
+      }).catch((err) => console.error("[alerts]", err instanceof Error ? err.message : err));
       throw new PipelineError(message, def.key);
     }
   }

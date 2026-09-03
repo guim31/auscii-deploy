@@ -42,7 +42,7 @@ Chaque intégration externe est une interface TypeScript avec deux implémentati
 | `DomainProvider` | `check(fqdn)`, `register(fqdn, contact)`, `getOrderStatus(id)`, `setRecords(fqdn, records[])`                       | `GandiProvider`, `MockDomainProvider`   |
 | `CloudProvider`  | `listOffers()`, `createServer(spec, cloudInit)`, `getServer(id)`, `deleteServer(id)`                                | `ScalewayProvider`, `MockCloudProvider` |
 | `GitProvider`    | `createRepo(slug)`, `pushRelease(repo, files, branch)`, `promote(repo)`, `tag(repo, name)`                          | `GitHubProvider`, `MockGitProvider`     |
-| `MailProvider`   | `send(message)`                                                                                                     | `ResendProvider`, `MockMailProvider`    |
+| `MailProvider`   | `send(message)` ; `ResendProvider` gère aussi le domaine d'envoi (`ensureSendingDomain`, `verifyDomain`)            | `ResendProvider`, `MockMailProvider`    |
 | `AiProvider`     | `analyzeSite(files)`                                                                                                | `AnthropicProvider`, `MockAiProvider`   |
 | `ServerAgent`    | `exec(cmd)`, `uploadArchive(tar, dest)`, `switchRelease(slug, ts)`, `writeCaddySite(slug, config)`, `reloadCaddy()` | `SshServerAgent`, `MockServerAgent`     |
 
@@ -67,7 +67,8 @@ Le champ `Site.runtime` porte ce choix. Le reste de l'outil (wizard, dashboard, 
 - `Release` : siteId, version, commitSha, gitTag, archiveHash, analysisReport (JSON), createdBy
 - `Deployment` : siteId, releaseId, kind `provision|deploy|promote|rollback`, environment `staging|production`, status `queued|running|succeeded|failed`, steps (JSON : état de chaque étape, base de la reprise), startedAt, finishedAt, rollbackOfId, triggeredBy
 - `DeploymentLog` : deploymentId, ts, level, step, message
-- `FormSubmission` : siteId, payload (JSON), fromIp, emailedAt
+- `FormSubmission` : siteId, payload (JSON), fromIp, env (`production|preview`), emailedAt (nul tant que l'email n'est pas parti)
+- `Alert` : kind (`domain_expiry|tls_failure|deployment_failed`), key, day, subject, body, sentAt, error ; unique par (kind, key, day)
 - `Integration` : provider, encryptedCredentials, updatedAt, lastTestAt
 - `SslCheck` : siteId, issuer, expiresAt, checkedAt, ok
 - `AuditLog` : userId, action, target, amount, createdAt (achats, commandes)
@@ -123,7 +124,9 @@ HTTPS automatique par hôte (défi HTTP-01). Un enregistrement `A <slug>.preview
 ## Formulaires de contact (centralisés sur le pilote)
 
 - Le site poste sur `/__forms/contact`, même origine, donc aucun CORS. Caddy relaie vers le pilote avec l'en-tête `X-Site`.
-- Le pilote valide (honeypot, limite de débit par IP, taille), enregistre `FormSubmission`, envoie l'email à `Site.formsEmail`, puis redirige vers `/merci.html` si présent, sinon répond en JSON.
+- Le pilote valide (honeypot `_gotcha`, limite de débit par IP en mémoire, taille), enregistre `FormSubmission`, met l'email en file (`mail.send`, reprise avec délai croissant) et répond : redirection 303 vers le chemin relatif du champ `_redirect` s'il est fourni, sinon JSON. Le worker envoie l'email à `Site.formsEmail` et marque `emailedAt` ; la page du site signale les messages non transmis et permet de les renvoyer.
+- Alertes à l'agence par la même file : `raiseAlert()` (`jobs/alerts.ts`) dédoublonne par sujet et par jour, puis `mail.send` envoie à `Settings.alertEmail`.
+- Domaine d'envoi : `no-reply@<domaine technique>` par défaut ; l'outil déclare le domaine chez Resend et écrit les enregistrements SPF/DKIM dans LiveDNS.
 - Aucun service à opérer sur les VPS sites.
 
 ## Mode démo
@@ -151,8 +154,8 @@ auscii-deploy/
       auth/
       providers/          domain/ cloud/ git/ mail/ ai/ + mocks
       deploy/             agent SSH, templates Caddy, runtimes (static)
-      jobs/               définitions pg-boss, machine à états
-      forms/
+      jobs/               définitions pg-boss, machine à états, mail.ts, alerts.ts
+      releases/           extraction, analyse, correction des formulaires
       crypto/
     worker/index.ts
     components/
