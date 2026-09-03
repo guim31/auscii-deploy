@@ -163,7 +163,7 @@ export function SiteCard({ site }: { site: SiteCardData }) {
               src={previewSrc}
               title={`Aperçu de ${site.clientName}`}
               className="size-full flex-1 rounded-b-xl bg-white"
-              sandbox="allow-same-origin allow-scripts allow-forms"
+              sandbox="allow-scripts allow-forms"
             />
           )}
         </DialogContent>

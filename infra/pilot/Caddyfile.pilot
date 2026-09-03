@@ -1,0 +1,35 @@
+# auscii-deploy — frontal du pilote. HTTPS automatique (Let's Encrypt).
+{
+	email {$ACME_EMAIL}
+}
+
+{$PILOT_HOST} {
+	encode gzip zstd
+
+	# Les archives de sites montent à 50 Mo, on laisse de la marge.
+	request_body {
+		max_size 60MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	reverse_proxy app:3000 {
+		# Le relais des formulaires des sites clients arrive ici avec X-Site.
+		header_up X-Forwarded-Proto {scheme}
+		health_uri /api/health
+		health_interval 30s
+		health_timeout 5s
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

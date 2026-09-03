@@ -330,3 +330,13 @@ model AuditLog {
   details   Json?
   createdAt DateTime @default(now())
 }
+
+/// better-auth rate limiting counters (storage: "database").
+model RateLimit {
+  id          String @id
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+
+  @@map("rateLimit")
+}

@@ -2,17 +2,17 @@
 
 Chaque phase est une pull request testable indépendamment.
 
-| Phase | Livrable                                                                                                                    | Critère de fin                                     | État    |
-| ----- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ------- |
-| 0     | Documents de cadrage (`docs/`, `CLAUDE.md`)                                                                                 | Validés, aucun code                                | Fait    |
-| 1     | Squelette Next.js, Prisma, auth, layout, parcours complet en **mode démo** (dashboard, wizard 4 étapes, console SSE, mocks) | Démo cliquable identique au futur réel             | Fait    |
-| 2     | Déploiement réel SSH + Caddy sur un VPS existant : staging, production, rollback, captures Playwright, contrôle HTTPS       | Un site statique en ligne en HTTPS depuis l'outil  | Fait    |
-| 3     | Gandi réel : vérification, achat avec confirmation, LiveDNS (production et preview)                                         | Domaine acheté et pointé depuis l'outil            | Fait    |
-| 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention | Fait    |
-| 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                      | Fait    |
-| 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production            | Fait    |
-| 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                               | Fait    |
-| 8     | Docker Compose du pilote, runbook complet, durcissement, e2e                                                                | Installation reproductible sur un VPS neuf         | À faire |
+| Phase | Livrable                                                                                                                    | Critère de fin                                     | État |
+| ----- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---- |
+| 0     | Documents de cadrage (`docs/`, `CLAUDE.md`)                                                                                 | Validés, aucun code                                | Fait |
+| 1     | Squelette Next.js, Prisma, auth, layout, parcours complet en **mode démo** (dashboard, wizard 4 étapes, console SSE, mocks) | Démo cliquable identique au futur réel             | Fait |
+| 2     | Déploiement réel SSH + Caddy sur un VPS existant : staging, production, rollback, captures Playwright, contrôle HTTPS       | Un site statique en ligne en HTTPS depuis l'outil  | Fait |
+| 3     | Gandi réel : vérification, achat avec confirmation, LiveDNS (production et preview)                                         | Domaine acheté et pointé depuis l'outil            | Fait |
+| 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention | Fait |
+| 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                      | Fait |
+| 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production            | Fait |
+| 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                               | Fait |
+| 8     | Docker Compose du pilote, runbook complet, durcissement, e2e                                                                | Installation reproductible sur un VPS neuf         | Fait |
 
 ## Ce que la phase 1 contient
 
@@ -65,6 +65,14 @@ Chaque phase est une pull request testable indépendamment.
 - `AnthropicProvider` réel via le SDK officiel : rapport structuré (résumé, SEO, accessibilité, contenu) demandé en sortie JSON validée, modèle `claude-opus-5` par défaut et modifiable dans les paramètres, budget d'entrée borné (40 pages, 80 000 caractères), test de la clé et du modèle.
 - Le rapport reçoit les constats de l'analyse automatique pour les compléter plutôt que les répéter. Un refus ou une erreur donne un rapport « indisponible » avec un bouton « Relancer l'analyse » à l'étape 3 ; sans clé, le rapport indique quoi configurer.
 - Erreurs traduites (clé invalide, modèle inconnu, limite de débit, indisponibilité), clé jamais journalisée.
+
+## Ce que la phase 8 contient
+
+- `Dockerfile` à deux cibles : `app` (Next.js autonome) et `worker` (jobs, avec le binaire `git` et Chromium). Images construites à chaque pull request et publiées sur GHCR depuis `main`.
+- Pile `infra/pilot/` : PostgreSQL, migrations et premier admin, application, worker, Caddy en frontal avec HTTPS automatique, sauvegarde nocturne.
+- Scripts d'exploitation : `install.sh` (installation à blanc et durcissement du VPS), `update.sh` (mise à jour avec retour arrière automatique), `backup.sh` et `restore.sh` (base et fichiers, rotation locale et Object Storage).
+- Durcissement : route `/api/health`, en-têtes de sécurité côté Caddy et Next, limitation des tentatives de connexion stockée en base, refus de démarrer avec les secrets d'exemple sur un hôte public, prévisualisation servie en origine opaque pour qu'un zip déposé ne puisse pas agir au nom de l'utilisateur connecté.
+- Runbook d'exploitation : installation, mise à jour, sauvegardes, rotation des clés, tableau des incidents.
 
 ## Prérequis à réunir avant la phase 2
 

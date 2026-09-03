@@ -36,8 +36,13 @@ const MIME: Record<string, string> = {
   ".map": "application/json",
 };
 
+/**
+ * `sandbox` without `allow-same-origin` puts the previewed site in an opaque
+ * origin: its scripts still run, but they cannot read the operator's cookies nor
+ * call the tool's own API with the ambient session.
+ */
 const CSP =
-  "default-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob: https:; font-src 'self' data: https:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'self'";
+  "sandbox allow-scripts allow-forms allow-popups allow-modals; default-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob: https:; font-src 'self' data: https:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'self'";
 
 async function resolveFile(root: string, segments: string[]): Promise<string | null> {
   const rel = path.posix.normalize(segments.join("/")).replace(/^(\.\.(\/|$))+/, "");

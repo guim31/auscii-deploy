@@ -2,7 +2,7 @@
 
 Outil web interne de l'agence AUSCII pour mettre en ligne, en quelques clics, les sites vitrine créés avec Claude Code : choix du domaine, dépôt d'un `.zip`, préproduction, publication.
 
-> État du projet : **phase 7 livrée**. Parcours complet en mode démo, déploiement réel SSH + Caddy, Gandi (domaines et DNS), Scaleway (serveurs), GitHub (un dépôt privé par site), Resend (formulaires de contact fiables, alertes à l'agence) et Claude (rapport de relecture à l'étape 3). Reste la phase 8 : Docker Compose du pilote et durcissement. Checklists de validation dans `docs/runbook.md`.
+> État du projet : **v1 complète, phases 1 à 8 livrées**. Parcours complet en mode démo, déploiement réel SSH + Caddy, Gandi (domaines et DNS), Scaleway (serveurs), GitHub (un dépôt privé par site), Resend (formulaires et alertes), Claude (rapport de relecture) et pile Docker du pilote avec son runbook d'exploitation. Installation : `infra/pilot/install.sh`, procédures et checklists dans `docs/runbook.md`.
 
 ## Démarrer
 

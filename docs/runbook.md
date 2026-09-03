@@ -15,11 +15,71 @@ Ce document sera complété au fil des phases. Il fixe dès maintenant les prér
 
 ## Pilote (hébergement de l'outil)
 
-- Un VPS Scaleway dédié, Debian 12, 2 vCPU / 4 Go recommandés.
-- Docker Compose : `app` (Next.js), `worker`, `postgres`. Caddy devant, HTTPS automatique sur `deploy.auscii.fr`.
-- Variables : `DATABASE_URL`, `APP_ENCRYPTION_KEY`, `BETTER_AUTH_SECRET`, `APP_URL`. Les clés des intégrations sont saisies dans l'interface, pas en variables.
-- Clé SSH du pilote générée au premier démarrage, conservée dans un volume, clé publique affichée dans Paramètres > Serveurs.
-- Sauvegardes : dump Postgres quotidien + volume des releases, vers un bucket Scaleway Object Storage.
+- Un VPS Scaleway dédié, Debian 12, 2 vCPU / 4 Go et 40 Go de disque recommandés (les archives des sites s'accumulent).
+- Pile Docker Compose dans `infra/pilot/` : `db` (PostgreSQL 16), `migrate` (migrations et premier admin, s'arrête), `app` (Next.js autonome), `worker` (jobs, avec `git` et Chromium), `caddy` (HTTPS automatique), `backup` (sauvegarde nocturne).
+- Images publiées par la CI sur `ghcr.io/<org>/auscii-deploy-app` et `-worker`, étiquetées par SHA court et `latest`.
+- Configuration dans `/opt/auscii-deploy/.env` (chmod 600) : `PILOT_HOST`, `ACME_EMAIL`, `IMAGE_TAG`, `POSTGRES_PASSWORD`, `BETTER_AUTH_SECRET`, `APP_ENCRYPTION_KEY`, le premier compte admin et les identifiants Object Storage. Les clés des intégrations ne sont pas là : elles se saisissent dans l'interface et sont chiffrées en base.
+- Clé SSH du pilote générée depuis Paramètres > Intégrations, stockée chiffrée en base, clé publique affichée pour les scripts d'installation des serveurs de sites.
+- Sauvegardes : dump Postgres et archive des fichiers chaque nuit, rotation locale (7 quotidiennes, 4 hebdomadaires) et copie vers Scaleway Object Storage.
+
+### Installation à blanc
+
+Prérequis : un VPS Debian 12 neuf, un enregistrement `A` `deploy.<domaine technique>` qui pointe vers son IP publique (le certificat ne peut pas être émis sans), et un accès root en SSH.
+
+```bash
+apt-get update && apt-get install -y git
+git clone https://github.com/<org>/auscii-deploy /tmp/auscii-deploy
+bash /tmp/auscii-deploy/infra/pilot/install.sh
+```
+
+Le script installe Docker, copie la pile dans `/opt/auscii-deploy`, demande le nom d'hôte, l'email Let's Encrypt et le premier compte administrateur, tire les secrets au hasard, durcit le système (pare-feu limité à 22, 80 et 443, `fail2ban`, mises à jour automatiques, mot de passe SSH désactivé), récupère les images, applique les migrations et démarre la pile. Il se termine en attendant que l'application soit saine.
+
+Si les images sont privées, se connecter à GHCR avant de lancer le script :
+
+```bash
+export GHCR_USER=<votre-compte> GHCR_TOKEN=<jeton avec read:packages>
+```
+
+Ensuite, dans l'interface : Paramètres > Agence (domaine technique, contact propriétaire, email des alertes), Paramètres > Intégrations (clés des cinq services, puis « Tester »), et génération de la paire de clés SSH du pilote.
+
+### Mise à jour
+
+```bash
+cd /opt/auscii-deploy
+./update.sh 3f8a1c2   # SHA court affiché par la CI, ou "latest"
+```
+
+Le script sauvegarde, récupère les images, applique les migrations, redémarre et attend la santé de l'application. Si elle ne repart pas, il revient automatiquement au tag précédent. Les déploiements de sites en cours au moment de la mise à jour sont repris par le worker au redémarrage : les pipelines reprennent à l'étape où ils s'étaient arrêtés.
+
+### Sauvegardes et restauration
+
+La sauvegarde tourne chaque nuit à l'heure de `BACKUP_HOUR`. À la demande :
+
+```bash
+cd /opt/auscii-deploy
+docker compose run --rm --entrypoint /usr/local/bin/backup.sh backup
+docker compose --profile tools run --rm --entrypoint sh restore -c 'ls -1t /backups/daily'
+```
+
+Restauration (arrête l'application, remplace les données, redémarre) :
+
+```bash
+./restore.sh db-20260903-030000.sql.gz data-20260903-030000.tar.gz
+```
+
+Depuis Object Storage, rapatrier d'abord l'archive puis la déposer dans le volume :
+
+```bash
+aws --endpoint-url https://s3.fr-par.scw.cloud s3 cp s3://<bucket>/2026/09/db-20260903-030000.sql.gz .
+docker compose cp db-20260903-030000.sql.gz backup:/backups/daily/
+```
+
+### Rotation d'une clé
+
+- **Clé d'une intégration** (Gandi, Scaleway, GitHub, Resend, Anthropic) : Paramètres > Intégrations, coller la nouvelle valeur, « Enregistrer », puis « Tester ». L'ancienne est écrasée en base ; révoquer ensuite chez le fournisseur.
+- **Clé SSH du pilote** : générer une nouvelle paire dans Paramètres > Intégrations, ajouter la nouvelle clé publique dans `/home/deploy/.ssh/authorized_keys` de chaque serveur de sites **avant** de retirer l'ancienne, vérifier avec « Retester » sur chaque serveur.
+- **`APP_ENCRYPTION_KEY`** : ne peut pas être changée sans réécrire les secrets chiffrés. Procédure : noter les clés des intégrations, vider la table `Integration`, changer la variable dans `.env`, redémarrer, ressaisir les clés.
+- **`BETTER_AUTH_SECRET`** : la changer déconnecte tout le monde, sans autre conséquence.
 
 ## Développement local
 
@@ -130,10 +190,23 @@ Tant que l'intégration Gandi n'est pas configurée, le wizard force « domaine 
 4. Publication en production, HTTPS valide sur le domaine et `www`, capture d'écran sur le tableau de bord.
 5. Nouveau zip, mise à jour, puis retour à la version précédente : le site bascule instantanément.
 
-## Procédures (à détailler en phase 8)
+## Incidents
 
-- Installation à blanc du pilote.
-- Ajout manuel d'un serveur existant.
-- Rotation d'une clé API ou de la clé SSH.
-- Restauration après perte du pilote.
-- Incidents : certificat non émis, DNS non propagé, serveur injoignable, rollback d'un site.
+| Symptôme                                             | Cause probable                                          | Que faire                                                                                                                                |
+| ---------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Le pilote répond « certificat invalide »             | `deploy.<domaine>` ne pointe pas encore vers le serveur | `dig +short deploy.<domaine>` ; corriger l'enregistrement `A`, puis `docker compose restart caddy`                                       |
+| Un site client reste en « préproduction » sans HTTPS | DNS non propagé vers le serveur du site                 | Page du site > carte DNS : vérifier les trois enregistrements attendus ; Caddy émet le certificat dans la minute qui suit la propagation |
+| Déploiement bloqué en « en cours »                   | Worker arrêté ou serveur injoignable                    | `docker compose logs worker` ; relancer le déploiement depuis la page du site (les pipelines reprennent à l'étape échouée)               |
+| « Serveur injoignable » sur un serveur de sites      | SSH filtré, serveur éteint, clé changée                 | Paramètres > Serveurs > « Retester » ; vérifier l'IP et le pare-feu chez Scaleway                                                        |
+| Un site en ligne est cassé après publication         | Version fautive                                         | Page du site > « Revenir à la version précédente » : bascule immédiate, `production` recule aussi sur GitHub                             |
+| Messages de formulaire non transmis                  | Resend indisponible ou domaine d'envoi non vérifié      | Page du site : badge « non transmis » et bouton « Renvoyer » ; Paramètres > Intégrations > Resend > « Tester »                           |
+| Rapport Claude « indisponible »                      | Limite de débit ou clé invalide                         | Étape 3 > « Relancer l'analyse » ; sinon vérifier la clé                                                                                 |
+| Disque plein sur le pilote                           | Archives des versions accumulées                        | `docker system prune -a` puis supprimer les anciennes versions inutiles ; augmenter le volume Scaleway                                   |
+| Le pilote ne redémarre pas après une mise à jour     | Migration ou image fautive                              | `update.sh` revient seul au tag précédent ; sinon `./update.sh <tag précédent>`                                                          |
+
+Journaux : `docker compose logs -f app worker caddy`. État de santé : `curl -fsS https://<pilote>/api/health`.
+
+## Limites connues
+
+- Le limiteur de débit des formulaires (5 messages par site et par IP toutes les 10 minutes) vit en mémoire du conteneur `app`. Le pilote tourne à une seule instance, donc la limite est effective ; elle se réinitialise à chaque redémarrage.
+- L'image du worker embarque Chromium : elle pèse environ 800 Mo. Le premier `docker compose pull` prend quelques minutes.

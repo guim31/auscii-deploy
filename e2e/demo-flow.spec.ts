@@ -149,6 +149,13 @@ test("an untransmitted message can be sent again", async ({ page }) => {
     .toBe(0);
 });
 
+test("the health endpoint answers without a session", async ({ request }) => {
+  // Used by the Docker healthcheck and by infra/pilot/update.sh.
+  const response = await request.get("/api/health");
+  expect(response.status()).toBe(200);
+  expect(await response.json()).toEqual({ status: "ok", database: "ok" });
+});
+
 test("settings pages are reachable for the admin", async ({ page }) => {
   await login(page);
   await page.goto("/settings/servers");
