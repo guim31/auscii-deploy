@@ -351,7 +351,7 @@ export function UploadStep({
               src={`/api/preview/${current.id}/`}
               title="Prévisualisation du site"
               className="h-[560px] w-full bg-white"
-              sandbox="allow-same-origin allow-scripts allow-forms"
+              sandbox="allow-scripts allow-forms"
               data-testid="preview-frame"
             />
           </Card>

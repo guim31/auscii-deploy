@@ -17,6 +17,29 @@ const schema = z.object({
   NODE_ENV: z.string().default("development"),
 });
 
+/** Values shipped in .env.example: fine locally, never acceptable on a public host. */
+const PLACEHOLDER_ENCRYPTION_KEY = "0".repeat(64);
+
+function isLocalUrl(url: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(url);
+}
+
+/**
+ * Refuses to boot a publicly reachable instance that still carries the example
+ * secrets or serves over plain HTTP. Local development is untouched.
+ */
+export function productionIssues(v: Env): string[] {
+  if (isLocalUrl(v.APP_URL)) return [];
+  const issues: string[] = [];
+  if (!v.APP_URL.startsWith("https://"))
+    issues.push("APP_URL: le pilote doit être servi en https (Caddy s'en charge).");
+  if (/change-me/i.test(v.BETTER_AUTH_SECRET))
+    issues.push("BETTER_AUTH_SECRET: valeur d'exemple, générez-en une (openssl rand -hex 32).");
+  if (v.APP_ENCRYPTION_KEY.toLowerCase() === PLACEHOLDER_ENCRYPTION_KEY)
+    issues.push("APP_ENCRYPTION_KEY: valeur d'exemple, générez-en une (openssl rand -hex 32).");
+  return issues;
+}
+
 export type Env = z.infer<typeof schema>;
 
 let cached: Env | null = null;
@@ -29,6 +52,8 @@ export function env(): Env {
         `Invalid environment: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
       );
     }
+    const issues = productionIssues(parsed.data);
+    if (issues.length > 0) throw new Error(`Configuration refusée : ${issues.join(" ")}`);
     cached = parsed.data;
   }
   return cached;

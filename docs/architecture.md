@@ -133,6 +133,10 @@ HTTPS automatique par hôte (défi HTTP-01). Un enregistrement `A <slug>.preview
 
 `DEMO_MODE=true` (ou l'interrupteur de l'en-tête, réservé aux admins) bascule la fabrique `getProviders()` sur les mocks. Les mocks reproduisent les délais et les états intermédiaires (commande de domaine en attente, serveur qui démarre, métriques qui évoluent). Les données de démo sont marquées `isDemo` et invisibles hors démo ; « Réinitialiser la démo » les recrée, y compris les fichiers des releases et les captures.
 
+## Hébergement du pilote
+
+Pile Docker Compose sur un VPS dédié (`infra/pilot/`) : Caddy en frontal (HTTPS automatique, en-têtes de sécurité, limite de taille des envois), `app` (image Next.js autonome), `worker` (mêmes sources, plus `git` et Chromium), PostgreSQL, un service de migrations qui s'exécute avant l'application, et un service de sauvegarde nocturne. Les images sont construites par la CI et publiées sur GHCR ; le pilote exécute un tag versionné, ce qui rend le retour arrière immédiat.
+
 ## Sécurité
 
 - Clés API chiffrées en base (AES-256-GCM), jamais renvoyées au navigateur.

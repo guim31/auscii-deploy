@@ -21,6 +21,19 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 14,
     updateAge: 60 * 60 * 24,
   },
+  trustedOrigins: [env().APP_URL],
+  // Slows down password guessing; stored in the database so a restart does not
+  // reset the counters. Enabled outside development only.
+  rateLimit: {
+    enabled: env().NODE_ENV !== "development",
+    storage: "database",
+    window: 60,
+    max: 60,
+    customRules: {
+      "/sign-in/email": { window: 300, max: 10 },
+      "/sign-up/email": { window: 3600, max: 5 },
+    },
+  },
   plugins: [admin({ defaultRole: "manager", adminRoles: ["admin"] }), nextCookies()],
 });
 

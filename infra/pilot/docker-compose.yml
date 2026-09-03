@@ -1,0 +1,140 @@
+# auscii-deploy — pile du pilote. Voir infra/pilot/README.md et docs/runbook.md.
+# Toutes les variables viennent de .env, à côté de ce fichier.
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql://auscii:${POSTGRES_PASSWORD:?}@db:5432/auscii
+  APP_URL: https://${PILOT_HOST:?}
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
+  APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?}
+  DATA_DIR: /data
+  NODE_ENV: production
+  DEMO_MODE: ${DEMO_MODE:-false}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: auscii
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: auscii
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auscii"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: ["no-new-privileges:true"]
+
+  # Applique les migrations puis crée le compte admin s'il n'existe pas, et s'arrête.
+  migrate:
+    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-worker:${IMAGE_TAG:-latest}
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      <<: *app-env
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    command: ["sh", "-c", "pnpm exec prisma migrate deploy && pnpm exec tsx prisma/seed.ts"]
+    security_opt: ["no-new-privileges:true"]
+
+  app:
+    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-app:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment: *app-env
+    volumes:
+      - app-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    security_opt: ["no-new-privileges:true"]
+
+  worker:
+    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-worker:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment: *app-env
+    volumes:
+      - app-data:/data
+    security_opt: ["no-new-privileges:true"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PILOT_HOST: ${PILOT_HOST:?}
+      ACME_EMAIL: ${ACME_EMAIL:?}
+    volumes:
+      - ./Caddyfile.pilot:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt: ["no-new-privileges:true"]
+
+  # Sauvegarde nocturne : dump Postgres + archive des releases, rotation locale,
+  # envoi vers Object Storage quand les identifiants S3 sont renseignés.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-fr-par}
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+    volumes:
+      - app-data:/data:ro
+      - backups:/backups
+      - ./backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "0 $${BACKUP_HOUR} * * * /usr/local/bin/backup.sh >> /backups/backup.log 2>&1" > /etc/crontabs/root
+        echo "[backup] planifié à $${BACKUP_HOUR}h"
+        exec crond -f -l 8
+    security_opt: ["no-new-privileges:true"]
+
+  # Restauration : monte les fichiers des sites en écriture. Hors du démarrage
+  # normal grâce au profil, lancé par restore.sh.
+  restore:
+    profiles: ["tools"]
+    image: postgres:16-alpine
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+    volumes:
+      - app-data:/data
+      - backups:/backups
+    entrypoint: ["sh"]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  db-data:
+  app-data:
+  caddy-data:
+  caddy-config:
+  backups:
