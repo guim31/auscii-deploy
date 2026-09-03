@@ -31,6 +31,7 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
   const [pending, startTransition] = useTransition();
   const [values, setValues] = useState<Record<string, string>>({
     agencyName: settings.agencyName,
+    alertEmail: settings.alertEmail,
     techDomain: settings.techDomain,
     previewSubdomain: settings.previewSubdomain,
     defaultOffer: settings.defaultOffer,
@@ -88,6 +89,15 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
             label="Nom de l'agence"
             value={values.agencyName}
             onChange={set("agencyName")}
+          />
+          <Field
+            id="alertEmail"
+            label="Email des alertes"
+            type="email"
+            value={values.alertEmail}
+            onChange={set("alertEmail")}
+            placeholder="contact@auscii.com"
+            hint="Reçoit les alertes : domaine qui expire, HTTPS en échec, déploiement en erreur."
           />
           <Field
             id="techDomain"

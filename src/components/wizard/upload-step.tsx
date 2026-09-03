@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRightIcon,
   CheckCircle2Icon,
+  WrenchIcon,
   FileArchiveIcon,
   InfoIcon,
   Loader2Icon,
@@ -17,7 +18,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getAiReportAction } from "@/server/actions/sites";
+import { fixFormsAction, getAiReportAction } from "@/server/actions/sites";
 import type { Analysis } from "@/server/releases/analyze";
 import type { AiReport, Finding } from "@/server/providers/types";
 import { formatBytes } from "@/server/capacity";
@@ -73,6 +74,9 @@ export function UploadStep({
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  // Bumped after an in-place fix so the preview iframe reloads.
+  const [previewKey, setPreviewKey] = useState(0);
   // AI reports fetched after the initial render, keyed by release id.
   const [fetchedReports, setFetchedReports] = useState<Record<string, AiReport>>({});
   const inputRef = useRef<HTMLInputElement>(null);
@@ -144,6 +148,18 @@ export function UploadStep({
   );
 
   const analysis = current?.analysis ?? null;
+  const unwiredForms = analysis?.forms.filter((f) => !f.wired).length ?? 0;
+
+  async function fixFormsNow() {
+    if (!current) return;
+    setFixing(true);
+    const res = await fixFormsAction(current.id);
+    setFixing(false);
+    if (!res.ok) return void toast.error(res.error);
+    toast.success(`${res.fixed} formulaire(s) corrigé(s)`);
+    setCurrent({ ...current, analysis: res.analysis });
+    setPreviewKey((k) => k + 1);
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -231,6 +247,19 @@ export function UploadStep({
                     </li>
                   ))}
                 </ul>
+                {unwiredForms > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={fixFormsNow}
+                    disabled={fixing}
+                    data-testid="fix-forms"
+                  >
+                    {fixing ? <Loader2Icon className="animate-spin" /> : <WrenchIcon />} Corriger
+                    les formulaires ({unwiredForms})
+                  </Button>
+                )}
                 {analysis.brokenLinks.length > 0 && (
                   <details className="text-muted-foreground mt-3 text-xs">
                     <summary className="cursor-pointer">Liens cassés</summary>
@@ -287,6 +316,7 @@ export function UploadStep({
               </a>
             </div>
             <iframe
+              key={previewKey}
               src={`/api/preview/${current.id}/`}
               title="Prévisualisation du site"
               className="h-[560px] w-full bg-white"

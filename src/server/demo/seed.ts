@@ -422,6 +422,22 @@ async function seedDemoOnce(): Promise<void> {
           },
         });
       }
+      if (demo.slug === "studio-lumen") {
+        // One message whose email was never sent, to show the "non transmis" state.
+        await prisma.formSubmission.create({
+          data: {
+            siteId: site.id,
+            payload: {
+              nom: "Léa Fontaine",
+              email: "lea.f@example.com",
+              message: "Faites-vous des photos de produits ?",
+            },
+            fromIp: "82.64.10.9",
+            env: "preview",
+            createdAt: ago(0, 3),
+          },
+        });
+      }
     }
   }
 }
@@ -440,5 +456,6 @@ export async function resetDemo(): Promise<void> {
   }
   await prisma.site.deleteMany({ where: { isDemo: true } });
   await prisma.server.deleteMany({ where: { isDemo: true } });
+  await prisma.alert.deleteMany({ where: { isDemo: true } });
   await seedDemo();
 }

@@ -1,4 +1,5 @@
 import { prisma } from "../db";
+import { raiseAlert } from "./alerts";
 import { getProviders } from "../providers";
 import { serverRef } from "./steps/server";
 import type { ServerMetrics } from "../providers/types";
@@ -47,6 +48,19 @@ export async function checkAllCertificates(): Promise<number> {
         error: result.error,
       },
     });
+    if (!result.ok)
+      await raiseAlert({
+        kind: "tls_failure",
+        key: site.domain!,
+        subject: `HTTPS en échec sur ${site.domain}`,
+        body: [
+          `Le contrôle quotidien du certificat de ${site.domain} (${site.clientName}) a échoué.`,
+          `Erreur : ${result.error ?? "certificat invalide"}`,
+          "",
+          "Vérifiez que le domaine pointe toujours vers le serveur et que Caddy tourne (Paramètres > Serveurs).",
+        ].join("\n"),
+        isDemo: site.isDemo,
+      });
     n++;
   }
   return n;

@@ -17,6 +17,7 @@ export const QUEUES = {
   sslCheck: "ssl.check",
   domainRefresh: "domain.refresh",
   aiReport: "release.aiReport",
+  mailSend: "mail.send",
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
@@ -44,9 +45,10 @@ export function startBoss(): Promise<PgBoss> {
       for (const name of Object.values(QUEUES)) {
         // Retries only cover jobs lost to a worker restart or a timeout: pipelines
         // report their own failures without throwing, so a handled failure is not retried.
+        // Emails are cheap to retry, so a mail outage is absorbed over a few hours.
         const options = {
-          retryLimit: 2,
-          retryDelay: 30,
+          retryLimit: name === QUEUES.mailSend ? 6 : 2,
+          retryDelay: name === QUEUES.mailSend ? 60 : 30,
           retryBackoff: true,
           expireInSeconds: 60 * 15,
           retentionSeconds: 60 * 60 * 24 * 7,

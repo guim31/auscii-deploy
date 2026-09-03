@@ -8,7 +8,8 @@ import { encryptJson } from "../crypto";
 import { getCurrentUser } from "../session";
 import { audit } from "../audit";
 import { getSettings, setSetting, type Settings } from "../settings";
-import { INTEGRATIONS, type IntegrationName } from "../providers";
+import { INTEGRATIONS, type DnsRecord, type IntegrationName } from "../providers";
+import type { SendingDomainStatus } from "../providers/mail/resend";
 import { resetDemo, seedDemo } from "../demo/seed";
 import { enqueue, QUEUES } from "../jobs/boss";
 import { collectAllMetrics } from "../jobs/maintenance";
@@ -113,6 +114,20 @@ export async function testIntegrationAction(
       const creds = await loadCredentials("scaleway");
       const me = await new ScalewayProvider(creds).whoAmI(settings.defaultZone);
       message = `Clé valide : ${me.offers} offre(s) disponibles en ${settings.defaultZone}. ${me.project ? `Projet : ${me.project}.` : (me.warning ?? "")}`;
+    } else if (provider === "resend") {
+      const { loadCredentials } = await import("../providers");
+      const { ResendProvider } = await import("../providers/mail/resend");
+      const creds = await loadCredentials("resend");
+      const me = await new ResendProvider(creds).whoAmI();
+      const tech = me.domains.find((d) => d.name.toLowerCase() === settings.techDomain);
+      const list = me.domains.map((d) => `${d.name} (${DOMAIN_STATUS[d.status]})`).join(", ");
+      if (!tech) {
+        message = `Clé valide. Le domaine technique ${settings.techDomain} n'est pas déclaré chez Resend : utilisez « Configurer le domaine d'envoi ». Domaines : ${list || "aucun"}.`;
+      } else if (tech.status !== "verified") {
+        message = `Clé valide. Le domaine ${tech.name} est ${DOMAIN_STATUS[tech.status]} chez Resend : les envois échoueront tant qu'il n'est pas vérifié.`;
+      } else {
+        message = `Clé valide. Domaine d'envoi ${tech.name} vérifié.`;
+      }
     } else {
       message =
         "Clé enregistrée. Le test réel de connexion arrive avec l'intégration correspondante.";
@@ -129,6 +144,110 @@ export async function testIntegrationAction(
   return ok ? { ok: true, message } : { ok: false, error: message };
 }
 
+const DOMAIN_STATUS: Record<SendingDomainStatus, string> = {
+  not_started: "non vérifié",
+  pending: "en attente de vérification",
+  verified: "vérifié",
+  failed: "en échec",
+  temporary_failure: "en échec temporaire",
+};
+
+export type SendingDomainView = {
+  name: string;
+  status: SendingDomainStatus;
+  statusLabel: string;
+  records: DnsRecord[];
+  /** true when the records were written to LiveDNS, false when they must be created by hand. */
+  dnsWritten: boolean;
+};
+
+/**
+ * Declares the tech domain on Resend and writes the SPF/DKIM records through
+ * LiveDNS when Gandi is configured. Idempotent; modifies the DNS zone, hence
+ * admin-only with an audit entry.
+ */
+export async function setupSendingDomainAction(): Promise<Result<{ domain: SendingDomainView }>> {
+  const user = await admin();
+  if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  const settings = await getSettings();
+  if (settings.demoMode) {
+    return {
+      ok: true,
+      domain: {
+        name: settings.techDomain,
+        status: "verified",
+        statusLabel: `${DOMAIN_STATUS.verified} (mode démo)`,
+        records: [],
+        dnsWritten: true,
+      },
+    };
+  }
+  try {
+    const { loadCredentials } = await import("../providers");
+    const { ResendProvider } = await import("../providers/mail/resend");
+    const { GandiProvider } = await import("../providers/domain/gandi");
+    const resend = new ResendProvider(await loadCredentials("resend"));
+    let domain = await resend.ensureSendingDomain(settings.techDomain);
+    const gandi = await loadCredentials("gandi");
+    let dnsWritten = false;
+    if (gandi?.apiKey && domain.records.length > 0) {
+      await new GandiProvider(gandi).setRecords(settings.techDomain, domain.records);
+      dnsWritten = true;
+    }
+    if (domain.status !== "verified") domain = await resend.verifyDomain(domain.id);
+    await audit(user, "mail.sending_domain", {
+      target: settings.techDomain,
+      details: { status: domain.status, dnsWritten, records: domain.records.length },
+    });
+    revalidatePath("/settings/integrations");
+    return {
+      ok: true,
+      domain: {
+        name: domain.name,
+        status: domain.status,
+        statusLabel: DOMAIN_STATUS[domain.status],
+        records: domain.records,
+        dnsWritten,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Configuration impossible" };
+  }
+}
+
+/** Sends a test email to the connected admin through the configured mail provider. */
+export async function sendTestEmailAction(): Promise<Result<{ message: string }>> {
+  const user = await admin();
+  if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  const settings = await getSettings();
+  try {
+    const { getProviders } = await import("../providers");
+    const { defaultSender } = await import("../providers/mail/resend");
+    const providers = await getProviders();
+    await providers.mail.send({
+      to: user.email,
+      from: providers.demo ? undefined : await senderFor(settings),
+      subject: `[${settings.agencyName}] Email de test auscii-deploy`,
+      text: `Cet email confirme que l'envoi depuis auscii-deploy fonctionne (expéditeur par défaut : ${defaultSender(settings.agencyName, settings.techDomain)}).`,
+    });
+    return {
+      ok: true,
+      message: providers.demo
+        ? `Mode démo : email simulé vers ${user.email}.`
+        : `Email envoyé à ${user.email}.`,
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Envoi impossible" };
+  }
+}
+
+async function senderFor(settings: Settings): Promise<string> {
+  const { loadCredentials } = await import("../providers");
+  const { defaultSender } = await import("../providers/mail/resend");
+  const creds = await loadCredentials("resend");
+  return creds?.from?.trim() || defaultSender(settings.agencyName, settings.techDomain);
+}
+
 const agencySchema = z.object({
   agencyName: z.string().min(1).max(80),
   techDomain: z
@@ -143,6 +262,7 @@ const agencySchema = z.object({
     .regex(/^[a-z0-9-]+$/),
   defaultOffer: z.string().min(1).max(30),
   defaultZone: z.string().min(1).max(30),
+  alertEmail: z.string().email().or(z.literal("")),
   gandiOrganizationId: z.string().max(120),
   gandiEmail: z.string().email().or(z.literal("")),
   gandiOrgName: z.string().max(120),
@@ -174,6 +294,7 @@ export async function saveAgencyAction(input: Record<string, string>): Promise<R
   const d = parsed.data;
   const current = await getSettings();
   await setSetting("agencyName", d.agencyName);
+  await setSetting("alertEmail", d.alertEmail);
   await setSetting("techDomain", d.techDomain);
   await setSetting("previewSubdomain", d.previewSubdomain);
   await setSetting("defaultOffer", d.defaultOffer);

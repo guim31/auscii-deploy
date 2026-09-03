@@ -17,6 +17,10 @@ import {
   startStagingDeploy,
 } from "../jobs/pipelines";
 import type { AiReport } from "../providers/types";
+import { analyzeSite, type Analysis } from "../releases/analyze";
+import { fixForms, listSiteFiles } from "../releases/fix-forms";
+import { releaseDir } from "../releases/paths";
+import { queueSubmissionMail } from "../jobs/mail";
 
 type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -207,6 +211,56 @@ export async function startRollbackAction(
     });
     revalidatePath(`/sites/${siteId}`);
     return { ok: true, deploymentId: deployment.id };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+/** Rewrites the forms of a release so they post to the built-in endpoint, then re-analyses it. */
+export async function fixFormsAction(
+  releaseId: string,
+): Promise<Result<{ fixed: number; analysis: Analysis }>> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Non authentifié" };
+  const release = await prisma.release.findUnique({
+    where: { id: releaseId },
+    include: { site: { select: { id: true, stagingReleaseId: true, liveReleaseId: true } } },
+  });
+  if (!release) return { ok: false, error: "Version introuvable" };
+  if (release.site.stagingReleaseId === releaseId || release.site.liveReleaseId === releaseId)
+    return { ok: false, error: "Cette version est déjà déployée : déposez une nouvelle archive." };
+  try {
+    const dir = releaseDir(releaseId);
+    const files = await listSiteFiles(dir);
+    const { fixed } = await fixForms(dir, files);
+    const analysis = await analyzeSite(dir, files);
+    await prisma.release.update({
+      where: { id: releaseId },
+      data: { analysis: analysis as object, fileCount: files.length },
+    });
+    revalidatePath(`/deploy/${release.site.id}/step-3`);
+    return { ok: true, fixed, analysis };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+/** Queues again the email of a submission that was not transmitted. */
+export async function resendSubmissionAction(submissionId: string): Promise<Result> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Non authentifié" };
+  const submission = await prisma.formSubmission.findUnique({
+    where: { id: submissionId },
+    select: { id: true, siteId: true, emailedAt: true, site: { select: { formsEmail: true } } },
+  });
+  if (!submission) return { ok: false, error: "Message introuvable" };
+  if (submission.emailedAt) return { ok: false, error: "Ce message a déjà été transmis." };
+  if (!submission.site.formsEmail)
+    return { ok: false, error: "Aucune adresse de réception configurée pour ce site." };
+  try {
+    await queueSubmissionMail(submission.id);
+    revalidatePath(`/sites/${submission.siteId}`);
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: errorMessage(err) };
   }

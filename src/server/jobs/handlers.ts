@@ -14,6 +14,7 @@ import { refreshAllDomains } from "./domain-refresh";
 import { generateAiReport, type AiReportPayload } from "./ai-report";
 import { runServerBootstrap, type ServerBootstrapPayload } from "./steps/register-server";
 import { runServerDelete, type ServerDeletePayload } from "./steps/delete-server";
+import { runMailSend, type MailSendPayload } from "./mail";
 
 const workOptions = { batchSize: 1, pollingIntervalSeconds: 1 } as const;
 
@@ -56,6 +57,9 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   );
   await boss.work<ServerDeletePayload>(QUEUES.serverDelete, workOptions, async (jobs) =>
     runServerDelete(one(jobs)),
+  );
+  await boss.work<MailSendPayload>(QUEUES.mailSend, workOptions, async (jobs) =>
+    runMailSend(one(jobs)),
   );
   await boss.work(QUEUES.serverHealth, { ...workOptions, pollingIntervalSeconds: 10 }, async () => {
     await collectAllMetrics();

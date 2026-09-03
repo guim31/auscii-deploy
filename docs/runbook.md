@@ -10,7 +10,7 @@ Ce document sera complété au fil des phases. Il fixe dès maintenant les prér
 | Gandi             | Compte avec moyen de paiement, clé API (PAT) avec droits domaine et LiveDNS, organisation propriétaire par défaut                               | Achat de domaines, DNS                                    |
 | Domaine technique | Un domaine dédié acheté chez Gandi (ex. `auscii.site`). `auscii.com` reste chez OVH avec les emails et n'est jamais modifié                     | Outil (`deploy.…`) et préproductions (`client.preview.…`) |
 | GitHub            | Une organisation AUSCII et une GitHub App installée dessus (permissions : contents et administration des dépôts). Aucun compte pour les gérants | Un repo par site                                          |
-| Resend            | Compte, domaine d'envoi vérifié (`deploy.auscii.fr` ou `auscii.fr`), clé API                                                                    | Formulaires, notifications                                |
+| Resend            | Compte et clé API (accès complet). Le domaine d'envoi est le domaine technique, déclaré et vérifié depuis l'outil                               | Formulaires, alertes                                      |
 | Anthropic         | Clé API                                                                                                                                         | Rapport d'analyse du site                                 |
 
 ## Pilote (hébergement de l'outil)
@@ -70,6 +70,23 @@ Tant que l'intégration Gandi n'est pas configurée, le wizard force « domaine 
 3. Installer l'App sur l'organisation (tous les dépôts). L'**Installation ID** est le nombre à la fin de l'URL de la page d'installation (`/settings/installations/<id>`).
 4. Paramètres > Intégrations > GitHub : organisation, App ID, Installation ID, clé privée, puis « Tester » : l'outil affiche l'App et le nombre de dépôts accessibles.
 5. Chaque site provisionné reçoit un dépôt privé `<org>/<slug>`. Chaque zip déposé devient un commit sur `staging` ; la publication place `production` sur ce commit et pose un tag `prod-<date>` ; un retour arrière replace `production` sur l'ancien commit avec un tag `-retour`. Les copies de travail vivent dans `DATA_DIR/git/`.
+
+## Resend (phase 6)
+
+1. Sur resend.com : API Keys > Create API Key, permission **Full access** (l'outil gère les domaines). Copier la clé dans Paramètres > Intégrations > Resend. L'expéditeur est facultatif : par défaut `<Agence> <no-reply@<domaine technique>>`.
+2. « Configurer le domaine d'envoi » : l'outil déclare le domaine technique chez Resend (région `eu-west-1`), écrit les enregistrements SPF et DKIM dans LiveDNS si Gandi est configuré (sinon ils sont affichés à créer à la main), puis demande la vérification. Relancer le bouton après quelques minutes jusqu'à l'état « vérifié ». « Tester » affiche l'état du domaine.
+3. « Envoyer un email de test » envoie un message à l'adresse de l'admin connecté.
+4. Paramètres > Agence > Email des alertes : destinataire des alertes (domaine qui expire sous 30 jours, HTTPS en échec, déploiement en erreur). Une alerte par sujet et par jour.
+5. Les messages des formulaires sont enregistrés avant tout envoi. En cas de panne Resend, le worker réessaie pendant plusieurs heures ; un message toujours « non transmis » sur la page du site peut être renvoyé d'un clic.
+6. Limite de débit des formulaires : 5 messages par site et par IP toutes les 10 minutes, en mémoire du processus `app` (suffisant pour un pilote à une instance).
+
+## Checklist de validation de la phase 6
+
+1. Intégration Resend testée, domaine technique « vérifié ».
+2. Email de test reçu.
+3. Message posté sur `/api/forms` (avec l'en-tête `X-Site: <slug>`) reçu à l'adresse du site et visible sur sa page ; en local sans pilote public : `curl -X POST -H "X-Site: <slug>" -d "nom=Test&email=test@example.com&message=Bonjour" http://localhost:3000/api/forms`.
+4. Alerte reçue après un déploiement forcé en erreur (ou un domaine dont l'expiration est proche).
+5. Étape 3 : un zip dont le formulaire ne pointe pas vers `/__forms/contact` est corrigé par le bouton, l'analyse repasse au vert.
 
 ## Checklist de validation de la phase 5
 

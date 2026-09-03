@@ -6,11 +6,11 @@ Chaque phase est une pull request testable indépendamment.
 | ----- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ------- |
 | 0     | Documents de cadrage (`docs/`, `CLAUDE.md`)                                                                                 | Validés, aucun code                                | Fait    |
 | 1     | Squelette Next.js, Prisma, auth, layout, parcours complet en **mode démo** (dashboard, wizard 4 étapes, console SSE, mocks) | Démo cliquable identique au futur réel             | Fait    |
-| 2     | Déploiement réel SSH + Caddy sur un VPS existant : staging, production, rollback, captures Playwright, contrôle HTTPS       | Un site statique en ligne en HTTPS depuis l'outil  | À faire |
-| 3     | Gandi réel : vérification, achat avec confirmation, LiveDNS (production et preview)                                         | Domaine acheté et pointé depuis l'outil            | À faire |
-| 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention | À faire |
-| 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                      | À faire |
-| 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production            | À faire |
+| 2     | Déploiement réel SSH + Caddy sur un VPS existant : staging, production, rollback, captures Playwright, contrôle HTTPS       | Un site statique en ligne en HTTPS depuis l'outil  | Fait    |
+| 3     | Gandi réel : vérification, achat avec confirmation, LiveDNS (production et preview)                                         | Domaine acheté et pointé depuis l'outil            | Fait    |
+| 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention | Fait    |
+| 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                      | Fait    |
+| 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production            | Fait    |
 | 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                               | À faire |
 | 8     | Docker Compose du pilote, runbook complet, durcissement, e2e                                                                | Installation reproductible sur un VPS neuf         | À faire |
 
@@ -51,6 +51,14 @@ Chaque phase est une pull request testable indépendamment.
 
 - `GitHubProvider` réel : authentification GitHub App (JWT puis jeton d'installation en cache), dépôt privé par site idempotent, commits sur `staging` via le binaire `git`, `production` et tag à la publication, retour arrière qui replace `production`, test de l'App.
 - Le jeton ne reste jamais dans la configuration Git locale ni dans les logs.
+
+## Ce que la phase 6 contient
+
+- `ResendProvider` réel : envoi transactionnel, gestion du domaine d'envoi (déclaration, enregistrements SPF/DKIM écrits dans LiveDNS quand Gandi est configuré, vérification), test de la clé.
+- File `mail.send` avec reprise : la route `/api/forms` enregistre le message et répond immédiatement, le worker envoie l'email et marque `emailedAt` ; un message non transmis est signalé sur la page du site avec un bouton « Renvoyer ».
+- Alertes à l'agence (`Alert`, une par sujet et par jour) : domaine qui expire sous 30 jours, contrôle HTTPS en échec, déploiement en erreur. Adresse dans Paramètres > Agence.
+- Bouton « Corriger les formulaires » à l'étape 3 : réécrit `action`, `method="post"` et ajoute le champ honeypot dans la release, puis relance l'analyse.
+- Les envois en préproduction sont marqués comme tels (en-tête `X-Site-Env`).
 
 ## Prérequis à réunir avant la phase 2
 

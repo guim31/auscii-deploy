@@ -23,6 +23,8 @@ describe("caddy blocks", () => {
     });
     expect(block).toContain("@enter path /__preview/tok123");
     expect(block).toContain("auscii_preview=tok123");
+    expect(block).toContain("header_up X-Site-Env preview");
+    expect(block).toContain("header_up X-Forwarded-Host {host}");
     expect(block).toContain("noindex");
     expect(block).toContain("403");
   });

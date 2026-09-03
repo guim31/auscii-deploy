@@ -37,6 +37,7 @@ import type { StepState } from "@/server/jobs/pipeline";
 import { getSettings } from "@/server/settings";
 import { expectedDnsRecords } from "@/server/deploy/dns";
 import { DnsRecordsCard } from "@/components/sites/dns-records-card";
+import { ResendSubmissionButton } from "@/components/sites/submission-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -374,11 +375,24 @@ export default async function SitePage({
                       {p.nom ?? p.name ?? p.email ?? "Anonyme"}
                       {p.email && p.nom ? ` · ${p.email}` : ""}
                     </span>
-                    <span>{formatDateTime(s.createdAt)}</span>
+                    <span className="flex items-center gap-2">
+                      {s.env === "preview" && <Badge variant="outline">préprod</Badge>}
+                      {!s.emailedAt && (
+                        <Badge variant="destructive" data-testid="submission-unsent">
+                          non transmis
+                        </Badge>
+                      )}
+                      {formatDateTime(s.createdAt)}
+                    </span>
                   </div>
                   <p className="whitespace-pre-wrap">
                     {p.message ?? p.msg ?? Object.values(p).join(" · ")}
                   </p>
+                  {!s.emailedAt && (
+                    <div className="mt-2 flex justify-end">
+                      <ResendSubmissionButton submissionId={s.id} />
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -125,6 +125,8 @@ export interface GitProvider {
 
 export type MailMessage = {
   to: string;
+  /** Overrides the sender configured in the integration settings. */
+  from?: string;
   subject: string;
   text: string;
   html?: string;

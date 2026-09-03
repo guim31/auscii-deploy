@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { saveIntegrationAction, testIntegrationAction } from "@/server/actions/settings";
 import type { IntegrationName } from "@/server/providers";
 import { formatDateTime } from "@/lib/format";
+import { ResendDomainPanel } from "./resend-domain-panel";
 
 export type IntegrationState = {
   name: IntegrationName;
@@ -74,11 +75,16 @@ const FIELDS: Record<
   },
   resend: {
     title: "Resend",
-    description: "Envoi des messages des formulaires de contact.",
-    phase: "phase 6",
+    description:
+      "Messages des formulaires de contact et alertes à l'agence. Clé API avec accès complet (les domaines sont gérés depuis l'outil).",
+    phase: "phase 6 (livrée)",
     fields: [
       { key: "apiKey", label: "API key", secret: true },
-      { key: "from", label: "Expéditeur", placeholder: "AUSCII <no-reply@auscii.site>" },
+      {
+        key: "from",
+        label: "Expéditeur (facultatif)",
+        placeholder: "AUSCII <no-reply@auscii.site>",
+      },
     ],
   },
   anthropic: {
@@ -102,7 +108,9 @@ const FIELDS: Record<
   },
 };
 
-function IntegrationCard({ state }: { state: IntegrationState }) {
+type MailContext = { techDomain: string; defaultSender: string };
+
+function IntegrationCard({ state, mail }: { state: IntegrationState; mail: MailContext }) {
   const def = FIELDS[state.name];
   const [values, setValues] = useState<Record<string, string>>({});
   const [pending, startTransition] = useTransition();
@@ -186,16 +194,29 @@ function IntegrationCard({ state }: { state: IntegrationState }) {
             {pending && <Loader2Icon className="animate-spin" />} Enregistrer
           </Button>
         </div>
+        {state.name === "resend" && (
+          <ResendDomainPanel
+            configured={state.configured}
+            techDomain={mail.techDomain}
+            defaultSender={mail.defaultSender}
+          />
+        )}
       </CardContent>
     </Card>
   );
 }
 
-export function IntegrationsForm({ state }: { state: IntegrationState[] }) {
+export function IntegrationsForm({
+  state,
+  mail,
+}: {
+  state: IntegrationState[];
+  mail: MailContext;
+}) {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {state.map((s) => (
-        <IntegrationCard key={s.name} state={s} />
+        <IntegrationCard key={s.name} state={s} mail={mail} />
       ))}
     </div>
   );
