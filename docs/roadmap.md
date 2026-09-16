@@ -2,17 +2,22 @@
 
 Chaque phase est une pull request testable indépendamment.
 
-| Phase | Livrable                                                                                                                    | Critère de fin                                     | État |
-| ----- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---- |
-| 0     | Documents de cadrage (`docs/`, `CLAUDE.md`)                                                                                 | Validés, aucun code                                | Fait |
-| 1     | Squelette Next.js, Prisma, auth, layout, parcours complet en **mode démo** (dashboard, wizard 4 étapes, console SSE, mocks) | Démo cliquable identique au futur réel             | Fait |
-| 2     | Déploiement réel SSH + Caddy sur un VPS existant : staging, production, rollback, captures Playwright, contrôle HTTPS       | Un site statique en ligne en HTTPS depuis l'outil  | Fait |
-| 3     | Gandi réel : vérification, achat avec confirmation, LiveDNS (production et preview)                                         | Domaine acheté et pointé depuis l'outil            | Fait |
-| 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention | Fait |
-| 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                      | Fait |
-| 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production            | Fait |
-| 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                               | Fait |
-| 8     | Docker Compose du pilote, runbook complet, durcissement, e2e                                                                | Installation reproductible sur un VPS neuf         | Fait |
+La **v1 est livrée** : phases 0 à 8, pilote installable sur un VPS neuf. La **v2**
+commence à la phase 9 et se limite à l'espace client de relecture, cadré dans
+`scope-v2.md`. La numérotation des phases continue.
+
+| Phase | Livrable                                                                                                                    | Critère de fin                                                              | État    |
+| ----- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------- |
+| 0     | Documents de cadrage (`docs/`, `CLAUDE.md`)                                                                                 | Validés, aucun code                                                         | Fait    |
+| 1     | Squelette Next.js, Prisma, auth, layout, parcours complet en **mode démo** (dashboard, wizard 4 étapes, console SSE, mocks) | Démo cliquable identique au futur réel                                      | Fait    |
+| 2     | Déploiement réel SSH + Caddy sur un VPS existant : staging, production, rollback, captures Playwright, contrôle HTTPS       | Un site statique en ligne en HTTPS depuis l'outil                           | Fait    |
+| 3     | Gandi réel : vérification, achat avec confirmation, LiveDNS (production et preview)                                         | Domaine acheté et pointé depuis l'outil                                     | Fait    |
+| 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention                          | Fait    |
+| 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                                               | Fait    |
+| 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production                                     | Fait    |
+| 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                                                        | Fait    |
+| 8     | Docker Compose du pilote, runbook complet, durcissement, e2e                                                                | Installation reproductible sur un VPS neuf                                  | Fait    |
+| 9     | **v2** — Espace client de relecture : commentaires ancrés sur la préproduction                                              | Un client commente depuis son lien, le gérant voit les retours dans l'outil | À faire |
 
 ## Ce que la phase 1 contient
 
@@ -26,6 +31,7 @@ Chaque phase est une pull request testable indépendamment.
 - `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm e2e`.
 - Phases 2 à 7 : tests de contrat des adaptateurs (mock et réel derrière la même suite), puis run réel sur un VPS de test et un domaine de test peu cher, avec checklist : HTTPS valide, rollback, formulaire reçu, commande de serveur annulable.
 - Phase 8 : installation à blanc du pilote en suivant uniquement le runbook.
+- Phase 9 : test e2e en mode démo où un commentaire posé sur la préproduction apparaît dans l'outil, puis relecture réelle d'un site par un client.
 
 ## Ce que la phase 2 contient
 
@@ -74,15 +80,28 @@ Chaque phase est une pull request testable indépendamment.
 - Durcissement : route `/api/health`, en-têtes de sécurité côté Caddy et Next, limitation des tentatives de connexion stockée en base, refus de démarrer avec les secrets d'exemple sur un hôte public, prévisualisation servie en origine opaque pour qu'un zip déposé ne puisse pas agir au nom de l'utilisateur connecté.
 - Runbook d'exploitation : installation, mise à jour, sauvegardes, rotation des clés, tableau des incidents.
 
+## Ce que la phase 9 contiendra
+
+Cadrage complet dans `scope-v2.md`. Les briques prévues :
+
+- Modèle `ReviewComment` : site, version relue, page, sélecteur CSS et position relative, prénom de l'auteur, texte, état « à traiter » ou « traité ».
+- Relais `/__review/*` ajouté au bloc Caddy de préproduction, sur le modèle de `/__forms/*` déjà en place, derrière la même barrière de cookie.
+- Widget de relecture servi par le pilote et injecté dans la seule copie de préproduction des fichiers, jamais dans la production.
+- API publique bornée (taille, limite de débit par site et par IP), texte jamais interprété comme du HTML.
+- Carte « Retours du client » sur la page du site, pastille au tableau de bord, alerte email quotidienne par site via `raiseAlert()`.
+- Commentaires de démonstration pour que le mode démo reste complet.
+
 ## Prérequis à réunir avant la phase 2
 
 - Un domaine technique acheté chez Gandi (ex. `auscii.site`) et saisi dans Paramètres > Agence.
 - Un VPS de test Scaleway (DEV1-S, Debian 12) accessible en SSH pour valider le déploiement réel.
 - Une organisation GitHub AUSCII avec une GitHub App installée (phase 5).
 
-## Idées v2
+## Plus tard
 
-- Runtime `docker` pour les sites dynamiques (Node, PHP).
-- Génération du site depuis un brief dans l'outil.
-- Espace client de relecture avec commentaires sur la préproduction.
-- Multi-registrar, multi-cloud.
+Repoussé sans calendrier : aucun besoin immédiat, et chacun de ces chantiers vaut
+une v3 à lui seul.
+
+- **Runtime `docker`** pour les sites dynamiques (Node, PHP, WordPress). L'abstraction `SiteRuntime` existe déjà et attend une seconde implémentation, mais le sujet emporte avec lui la construction d'images, les bases de données par site et leurs sauvegardes.
+- **Génération du site depuis un brief** dans l'outil, au lieu du zip produit ailleurs.
+- **Multi-registrar et multi-cloud** : une seconde implémentation de `DomainProvider` et de `CloudProvider`, surtout un travail d'abstraction et de tests de contrat.
