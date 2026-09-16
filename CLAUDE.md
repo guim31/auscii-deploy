@@ -11,6 +11,7 @@ Outil web interne d'AUSCII pour publier des sites vitrine statiques sur des VPS 
 - `docs/architecture.md` : stack, adaptateurs, modèle de données, pipeline.
 - `docs/roadmap.md` : phase en cours et critère de fin.
 - `docs/runbook.md` : exploitation du pilote, incidents, sauvegardes.
+- `docs/accounts-setup.md` : ouverture des comptes fournisseurs au nom de l'agence, pas à pas.
 
 ## Règles
 

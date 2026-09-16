@@ -4,6 +4,8 @@ Ce document sera complété au fil des phases. Il fixe dès maintenant les prér
 
 ## Prérequis côté agence
 
+La création des comptes et espaces chez chaque fournisseur, au nom de l'agence et avec un contact technique invité, est détaillée pas à pas dans `accounts-setup.md`.
+
 | Service           | À préparer                                                                                                                                      | Utilisé pour                                              |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
 | Scaleway          | Projet, clé API (Instances), zone par défaut                                                                                                    | Commande des VPS sites                                    |
