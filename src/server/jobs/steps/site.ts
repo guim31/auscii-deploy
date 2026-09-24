@@ -9,9 +9,15 @@ import { serverRef } from "./server";
 import type { Logger } from "../log";
 import { env } from "../../env";
 
-/** Host of the pilot, as the site servers reach it to relay contact forms. */
-export function pilotHost(): string {
-  return new URL(env().APP_URL).host;
+/**
+ * Host of the pilot, as the site servers reach it to relay contact forms: the
+ * host of APP_URL. A local APP_URL (localhost, no public name) cannot be reached
+ * by a server anyway; the demo then uses a placeholder under the tech domain.
+ */
+export function pilotHost(settings: Pick<Settings, "techDomain">): string {
+  const host = new URL(env().APP_URL).hostname;
+  if (host.includes(".") && !/^[\d.]+$/.test(host)) return host;
+  return `deploy.${settings.techDomain}`;
 }
 
 export function productionHosts(site: Site): string[] {
@@ -39,7 +45,7 @@ export async function deployRelease(input: {
     releaseDir: releaseDir(release.id),
     environment,
     hosts,
-    pilotHost: pilotHost(),
+    pilotHost: pilotHost(settings),
     previewToken: site.previewToken,
     log: (m) => log.info(m),
   });
