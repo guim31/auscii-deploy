@@ -75,14 +75,22 @@ Le champ `Site.runtime` porte ce choix. Le reste de l'outil (wizard, dashboard, 
 
 ## Pipeline de déploiement
 
-Un job pg-boss exécute un pipeline entier (`site.provision`, `site.deploy`, `site.promote`, `site.rollback`). Le pipeline enregistre l'état de chaque étape dans `Deployment.steps` : une relance reprend à l'étape échouée, les étapes terminées ne sont jamais rejouées. Chaque étape journalise dans `DeploymentLog`, diffusé en temps réel par SSE.
+Un job pg-boss exécute un pipeline entier (`site.provision`, `site.deploy`, `site.promote`, `site.rollback`). Le pipeline enregistre l'état de chaque étape dans `Deployment.steps` : une relance reprend à l'étape échouée, les étapes terminées ne sont jamais rejouées. Chaque étape journalise dans `DeploymentLog` (secrets masqués), diffusé en temps réel par SSE.
+
+Garanties :
+
+- le déploiement est pris atomiquement (`queued` → `running`) : un job en double ou relivré ne fait rien ; les files de pipeline ont `retryLimit: 0` et un battement de cœur, et un déploiement interrompu est marqué en échec au démarrage du worker ;
+- un seul déploiement en attente ou en cours par site (verrou consultatif PostgreSQL à la création) ;
+- les confirmations des actions payantes sont stockées sur le `Deployment` ; le serveur commandé est rattaché au site avant l'appel au fournisseur et reçoit son identifiant dès que l'instance existe ; l'achat de domaine passe par un état `ordering`, et une reprise cherche le domaine dans le compte avant tout nouvel achat ;
+- les providers sont choisis d'après `site.isDemo` ou `server.isDemo`, jamais d'après le mode affiché ;
+- un échec ne sort jamais un site de la production : seul un provisioning échoué met le site en `error`.
 
 1. `server` : choisit, par métriques, le serveur le plus rempli qui a encore de la place ; sinon commande un serveur (Scaleway + cloud-init) après confirmation d'un admin, attend l'IP, SSH et Caddy, puis le marque `ready`.
 2. `domain.register` (après confirmation explicite en UI) puis `domain.configureDns` : `A` apex, `A www`, `A <slug>.preview` vers le serveur.
 3. `git.createRepo` puis `git.importRelease` : contenu du zip poussé sur `staging`.
 4. `site.deploy(staging)` : archive envoyée par SSH, extraction dans `releases/<ts>`, bascule de `current`, écriture du bloc Caddy preview, reload.
 5. `site.promote` : fusion `staging` → `production`, tag `prod-<AAAAMMJJ-HHMM>`, puis `site.deploy(production)` sur le domaine, `ssl.check`, `screenshot.capture`.
-6. `site.rollback` : bascule de `current` vers la release précédente, instantané.
+6. `site.rollback` : bascule de `current` vers la release choisie, instantanée tant qu'elle est encore sur le serveur (les trois dernières versions publiées sont conservées) ; sinon elle est renvoyée.
 7. Récurrents : `server.health` (horaire, relève les métriques de capacité), `ssl.check` (quotidien), `release.aiReport` (à chaque dépôt de zip, sans bloquer le wizard).
 
 ## Provisioning des VPS sites (cloud-init)
@@ -98,33 +106,63 @@ Image Debian 12. Le script cloud-init :
 
 ## Caddy sur les VPS sites
 
-Bloc production, généré par l'outil :
+Bloc production, généré par l'outil (`src/server/deploy/caddy.ts`, exemple pour le slug `dupont`) :
 
 ```
 client.fr, www.client.fr {
-  root * /srv/sites/<slug>/current
-  encode gzip
-  file_server
-  handle /__forms/* {
-    reverse_proxy https://deploy.auscii.fr {
-      header_up X-Site <slug>
-      header_up Host deploy.auscii.fr
-    }
-  }
+	root * /srv/sites/dupont/current
+	encode zstd gzip
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+	@dotfiles {
+		path */.*
+		not path /.well-known/*
+	}
+	handle /__forms/* {
+		request_body {
+			max_size 64KB
+		}
+		request_header -X-Auscii-*
+		request_header -X-Site
+		request_header -X-Site-Env
+		request_header -Cookie
+		request_header -Authorization
+		rewrite * /api/forms
+		reverse_proxy https://deploy.auscii.site {
+			header_up Host deploy.auscii.site
+			header_up X-Site dupont
+			header_up X-Auscii-Relay <secret propre au site>
+			header_up X-Auscii-Client-Ip {remote_host}
+			header_up X-Auscii-Site-Host {host}
+		}
+	}
+	handle {
+		error @dotfiles 404
+		try_files {path} {path}/index.html {path}.html
+		file_server
+	}
+	handle_errors { … page 404.html du site … }
 }
 ```
 
+Le bloc est écrit sous verrou dans un fichier temporaire, validé avec `caddy validate`, et l'ancien bloc est restauré si la validation échoue.
+
 Bloc preview : identique sur `<slug>.preview.auscii.fr`, avec une porte d'accès par lien secret :
 
-- `/__preview/<token>` pose un cookie `auscii_preview=<token>` et redirige vers `/`,
+- `/__preview/<token>` pose un cookie `auscii_preview=<token>` et redirige vers `/` (`redir * / 302`),
 - sans cookie valide (matcher sur l'en-tête `Cookie`), Caddy sert une page « Accès réservé ».
 
-HTTPS automatique par hôte (défi HTTP-01). Un enregistrement `A <slug>.preview.auscii.fr` est créé par site vers le bon serveur via LiveDNS ; pas de wildcard, ce qui fonctionne avec plusieurs serveurs.
+- le relais des formulaires envoie en plus `X-Site-Env: preview`.
+
+HTTPS automatique par hôte (défi HTTP-01). Un enregistrement `A <slug>.preview.<domaine des préproductions>` est créé par site vers le bon serveur via LiveDNS ; pas de wildcard, ce qui fonctionne avec plusieurs serveurs.
 
 ## Formulaires de contact (centralisés sur le pilote)
 
-- Le site poste sur `/__forms/contact`, même origine, donc aucun CORS. Caddy relaie vers le pilote avec l'en-tête `X-Site`.
-- Le pilote valide (honeypot `_gotcha`, limite de débit par IP en mémoire, taille), enregistre `FormSubmission`, met l'email en file (`mail.send`, reprise avec délai croissant) et répond : redirection 303 vers le chemin relatif du champ `_redirect` s'il est fourni, sinon JSON. Le worker envoie l'email à `Site.formsEmail` et marque `emailedAt` ; la page du site signale les messages non transmis et permet de les renvoyer.
+- Le site poste sur `/__forms/contact`, même origine, donc aucun CORS. Le Caddy du site limite le corps à 64 Ko, retire les en-têtes envoyés par le visiteur, réécrit le chemin en `/api/forms` et relaie vers le pilote avec `X-Site` (slug du site), `X-Auscii-Relay` (secret propre au site, dérivé de `APP_ENCRYPTION_KEY`), `X-Auscii-Client-Ip` et, en préproduction seulement, `X-Site-Env: preview`.
+- Le pilote refuse toute requête sans secret valide (403), borne le corps (64 Ko, 30 champs), limite le débit par visiteur et par site, ignore les envois du honeypot `_gotcha`, enregistre `FormSubmission`, met l'email en file (`mail.send`, reprise avec délai croissant, clé d'idempotence) et répond : redirection 303 relative vers le champ `_redirect` s'il est fourni, sinon JSON. Le worker envoie l'email à `Site.formsEmail` et marque `emailedAt` ; la page du site signale les messages non transmis et permet de les renvoyer.
 - Alertes à l'agence par la même file : `raiseAlert()` (`jobs/alerts.ts`) dédoublonne par sujet et par jour, puis `mail.send` envoie à `Settings.alertEmail`.
 - Domaine d'envoi : `no-reply@<domaine technique>` par défaut ; l'outil déclare le domaine chez Resend et écrit les enregistrements SPF/DKIM dans LiveDNS.
 - Aucun service à opérer sur les VPS sites.
@@ -140,34 +178,37 @@ Pile Docker Compose sur un VPS dédié (`infra/pilot/`) : Caddy en frontal (HTTP
 ## Sécurité
 
 - Clés API chiffrées en base (AES-256-GCM), jamais renvoyées au navigateur.
-- Clé SSH du pilote générée à l'installation, clé publique injectée par cloud-init. Utilisateur `deploy` sans sudo hormis le reload de Caddy.
+- Clé SSH du pilote générée depuis l'interface (Paramètres > Intégrations), clé publique injectée par cloud-init. Utilisateur `deploy` sans sudo hormis le reload de Caddy, et hors du groupe `docker`. Clé d'hôte acceptée au premier contact puis épinglée, avec une entrée `AuditLog`.
 - Achat de domaine et commande de serveur : confirmation explicite, rôle `admin`, `AuditLog`.
 - Sessions HTTP-only, protection CSRF de better-auth, upload limité à 50 Mo, extraction du zip sécurisée (refus de `../`, des liens symboliques, des fichiers exécutables).
-- Contenu du preview servi par le pilote à l'étape 3 sous un sous-domaine dédié, avec en-têtes `Content-Security-Policy` restrictifs.
+- Aperçu de l'étape 3 servi par le pilote sous `/apercu/<jeton signé>/` sur une origine dédiée (`PREVIEW_ORIGIN`, domaine distinct de l'outil), sans cookie de session, avec une CSP `sandbox` restrictive.
+- Préproductions des clients sur un domaine enregistrable distinct de celui de l'outil (réglage « domaine des préproductions »).
+- Relais des formulaires authentifié par un secret par site ; fichiers cachés (`.env`, `.git`…) écartés des archives et jamais servis par Caddy.
+- Mots de passe de 12 caractères minimum, sessions de 7 jours, pas d'inscription publique, pas de plugin `admin` de better-auth (ses routes contourneraient les garde-fous et le journal).
 
-## Structure du repo (cible)
+## Structure du repo
 
 ```
 auscii-deploy/
   CLAUDE.md
   docs/
   src/
-    app/                  (auth)/login, (app)/dashboard, sites/[id], deploy (wizard), settings/*
+    app/                  (auth)/login, (app)/ tableau de bord, sites/[siteId], deploy/ (wizard), settings/*
+                          api/ : auth, forms, health, sites/[siteId]/upload, deployments/[id]/stream, screenshots
+                          apercu/ : aperçu signé des versions (étape 3)
+    proxy.ts              redirection vers /login (Next 16)
     server/
-      db/                 client Prisma
-      auth/
-      providers/          domain/ cloud/ git/ mail/ ai/ + mocks
-      deploy/             agent SSH, templates Caddy, runtimes (static)
-      jobs/               définitions pg-boss, machine à états, mail.ts, alerts.ts
-      releases/           extraction, analyse, correction des formulaires
-      crypto/
+      db.ts, env.ts, auth.ts, session.ts, crypto.ts, settings.ts, mode.ts, forms.ts, audit.ts
+      providers/          domain/ cloud/ git/ mail/ ai/ agent/ screenshot/, mocks, http-utils.ts
+      deploy/             blocs Caddy, runtime static, bootstrap, DNS, TLS, clés SSH, relais
+      jobs/               pg-boss, pipeline, pipelines, steps/, mail, alerts, maintenance
+      releases/           extraction, analyse, correction des formulaires, URL d'aperçu
+      actions/            server actions
     worker/index.ts
     components/
   prisma/schema.prisma
   infra/
-    cloud-init.yaml
-    caddy/                templates de blocs
-    docker-compose.yml    pilote (app, worker, postgres)
-    Caddyfile.pilot
+    bootstrap-server.sh   installation d'un serveur de sites (identique au cloud-init)
+    pilot/                docker-compose.yml, Caddyfile.pilot, install, update, backup, restore
   e2e/
 ```
