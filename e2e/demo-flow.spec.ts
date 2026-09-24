@@ -165,7 +165,7 @@ test("settings pages are reachable for the admin", async ({ page }) => {
   await expect(page.getByTestId("resend-domain-panel")).toContainText("no-reply@");
   await expect(page.getByRole("button", { name: "Configurer le domaine d'envoi" })).toBeDisabled();
   await page.goto("/settings/agency");
-  await expect(page.getByLabel("Domaine technique")).toHaveValue(/auscii/);
+  await expect(page.getByLabel("Domaine technique", { exact: true })).toHaveValue(/auscii/);
   await page.goto("/settings/users");
   await expect(page.getByText(EMAIL)).toBeVisible();
 });
