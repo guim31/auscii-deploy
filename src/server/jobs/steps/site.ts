@@ -7,9 +7,11 @@ import { releaseDir, screenshotsDir } from "../../releases/paths";
 import { runtimeFor } from "../../deploy/runtime";
 import { serverRef } from "./server";
 import type { Logger } from "../log";
+import { env } from "../../env";
 
-export function pilotHost(settings: Settings): string {
-  return `deploy.${settings.techDomain}`;
+/** Host of the pilot, as the site servers reach it to relay contact forms. */
+export function pilotHost(): string {
+  return new URL(env().APP_URL).host;
 }
 
 export function productionHosts(site: Site): string[] {
@@ -37,19 +39,70 @@ export async function deployRelease(input: {
     releaseDir: releaseDir(release.id),
     environment,
     hosts,
-    pilotHost: pilotHost(settings),
+    pilotHost: pilotHost(),
     previewToken: site.previewToken,
     log: (m) => log.info(m),
   });
 }
 
+/**
+ * Deletes old releases on the server once a deployment succeeded. Keeps what a
+ * rollback may need; never fails the deployment.
+ */
+export async function pruneOldReleases(input: {
+  site: Site;
+  server: Server;
+  environment: "staging" | "production";
+  keepReleaseIds: string[];
+  providers: Providers;
+  log: Logger;
+}): Promise<void> {
+  const { site, server, environment, keepReleaseIds, providers, log } = input;
+  try {
+    await runtimeFor(site.runtime).prune(providers.agent, {
+      server: serverRef(server),
+      slug: site.slug,
+      environment,
+      keepReleaseIds: [...new Set(keepReleaseIds.filter(Boolean))],
+      log: (m) => log.info(m),
+    });
+  } catch (err) {
+    await log.warn(
+      `Nettoyage des anciennes versions impossible : ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** Releases kept in production for rollbacks: the last ones that were published. */
+export async function productionKeepList(siteId: string, count = 3): Promise<string[]> {
+  const published = await prisma.release.findMany({
+    where: { siteId, gitTag: { not: null } },
+    orderBy: { version: "desc" },
+    take: count,
+    select: { id: true },
+  });
+  return published.map((r) => r.id);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Checks HTTPS on a host. Right after a Caddy reload the certificate is often
+ * still being issued, so a failure is retried a few times before being logged
+ * as a warning (the daily check follows up).
+ */
 export async function checkTls(
   host: string,
   siteId: string,
   providers: Providers,
   log: Logger,
+  attempts = 4,
 ): Promise<void> {
-  const result = await providers.agent.checkTls(host);
+  let result = await providers.agent.checkTls(host);
+  for (let i = 1; i < attempts && !result.ok; i++) {
+    await sleep(providers.demo ? 100 : 15_000);
+    result = await providers.agent.checkTls(host);
+  }
   await prisma.sslCheck.create({
     data: {
       siteId,

@@ -1,11 +1,25 @@
-import type { DeployEnv, DeployKind } from "@prisma/client";
+import type { Deployment, DeployEnv, DeployKind } from "@prisma/client";
 import { prisma } from "../db";
 import { previewHostFor } from "../settings";
 import { enqueue, QUEUES } from "./boss";
 import { runPipeline, type StepDefinition } from "./pipeline";
-import { bootstrapServer, listCandidates, orderServer, serverRef } from "./steps/server";
-import { configureDns, registerDomain } from "./steps/domain";
-import { captureScreenshot, checkTls, deployRelease, productionHosts } from "./steps/site";
+import {
+  bootstrapServer,
+  listCandidates,
+  orderServer,
+  resumeOrder,
+  serverRef,
+} from "./steps/server";
+import { configureDns, registerDomain, verifyOwnedDomain } from "./steps/domain";
+import {
+  captureScreenshot,
+  checkTls,
+  deployRelease,
+  productionHosts,
+  productionKeepList,
+  pruneOldReleases,
+} from "./steps/site";
+import { runtimeFor } from "../deploy/runtime";
 import { pickServer } from "../capacity";
 import { ProviderNotConfiguredError } from "../providers/types";
 import { describeRecords, expectedDnsRecords } from "../deploy/dns";
@@ -13,22 +27,62 @@ import { releaseDir } from "../releases/paths";
 
 export type ProvisionPayload = {
   deploymentId: string;
-  confirmServerOrder?: boolean;
   zipBytes?: number;
 };
 export type DeployPayload = { deploymentId: string };
-export type ServerOrderPayload = { serverId?: string; offerId?: string };
 
-async function createDeployment(
-  siteId: string,
-  kind: DeployKind,
-  environment: DeployEnv | null,
-  releaseId: string | null,
-  userId: string | null,
-  rollbackOfId?: string,
-) {
-  return prisma.deployment.create({
-    data: { siteId, kind, environment, releaseId, triggeredById: userId, rollbackOfId },
+/** Message of the server step when a paid order needs an admin: the UI offers the confirmation. */
+export const SERVER_ORDER_CONFIRMATION_REQUIRED =
+  "Aucun serveur n'a de place disponible. Un administrateur doit confirmer la commande d'un nouveau serveur.";
+
+/** Another deployment of the site is queued or running. */
+export class DeploymentBusyError extends Error {
+  constructor() {
+    super(
+      "Une opération est déjà en cours sur ce site. Attendez qu'elle se termine avant d'en lancer une autre.",
+    );
+    this.name = "DeploymentBusyError";
+  }
+}
+
+type NewDeployment = {
+  siteId: string;
+  kind: DeployKind;
+  environment: DeployEnv | null;
+  releaseId: string | null;
+  userId: string | null;
+  rollbackOfId?: string | null;
+  serverOrderConfirmedById?: string | null;
+  serverOrderMaxPrice?: number | null;
+  domainPurchaseConfirmedById?: string | null;
+};
+
+/**
+ * Creates a deployment unless the site already has one queued or running. The
+ * check and the insert run under a per-site advisory lock, so two clicks (or
+ * two people) can never start two operations on the same site.
+ */
+async function createExclusiveDeployment(input: NewDeployment): Promise<Deployment> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${input.siteId}))`;
+    const busy = await tx.deployment.findFirst({
+      where: { siteId: input.siteId, status: { in: ["queued", "running"] } },
+      select: { id: true },
+    });
+    if (busy) throw new DeploymentBusyError();
+    return tx.deployment.create({
+      data: {
+        siteId: input.siteId,
+        kind: input.kind,
+        environment: input.environment,
+        releaseId: input.releaseId,
+        triggeredById: input.userId,
+        rollbackOfId: input.rollbackOfId || null,
+        serverOrderConfirmedById: input.serverOrderConfirmedById ?? null,
+        serverOrderMaxPrice: input.serverOrderMaxPrice ?? null,
+        domainPurchaseConfirmedById: input.domainPurchaseConfirmedById ?? null,
+      },
+    });
   });
 }
 
@@ -42,10 +96,19 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
       if (ctx.site.serverId) {
         const s = await prisma.server.findUniqueOrThrow({ where: { id: ctx.site.serverId } });
         if (s.status === "ready") return { skipped: `déjà hébergé sur ${s.name}` };
-        await bootstrapServer(s, ctx.providers, ctx.log);
-        return;
+        if (s.status !== "retired" && s.status !== "retiring") {
+          // A server ordered by a previous attempt: resume it, never order another one.
+          const resumed =
+            s.status === "ordering" && !s.providerId
+              ? await resumeOrder(s, ctx.providers, ctx.settings, ctx.log)
+              : s;
+          await bootstrapServer(resumed, ctx.providers, ctx.log);
+          return;
+        }
+        await prisma.site.update({ where: { id: ctx.site.id }, data: { serverId: null } });
+        await ctx.refreshSite();
       }
-      const candidates = await listCandidates(ctx.providers.demo);
+      const candidates = await listCandidates(ctx.site.isDemo);
       const placement = pickServer(candidates, payload.zipBytes ?? 0, ctx.settings.capacity);
       if (placement.kind === "existing") {
         await ctx.log.success(
@@ -58,15 +121,19 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
         await ctx.refreshSite();
         return;
       }
-      if (!payload.confirmServerOrder) {
-        throw new Error(
-          "Aucun serveur n'a de place disponible. Un administrateur doit confirmer la commande d'un nouveau serveur.",
-        );
-      }
+      // Paying for a server needs the confirmation of an admin, stored on the deployment.
+      if (!ctx.deployment.serverOrderConfirmedById)
+        throw new Error(SERVER_ORDER_CONFIRMATION_REQUIRED);
       await ctx.log.warn("Aucun serveur disponible : commande d'un nouveau serveur");
-      let server = await orderServer(ctx.providers, ctx.settings, ctx.log);
-      server = await bootstrapServer(server, ctx.providers, ctx.log);
-      await prisma.site.update({ where: { id: ctx.site.id }, data: { serverId: server.id } });
+      const server = await orderServer(ctx.providers, ctx.settings, ctx.log, {
+        maxMonthlyPrice: ctx.deployment.serverOrderMaxPrice,
+        confirmedById: ctx.deployment.serverOrderConfirmedById,
+        // Attached before the order: a retry resumes this server instead of ordering another.
+        onRow: async (row) => {
+          await prisma.site.update({ where: { id: ctx.site.id }, data: { serverId: row.id } });
+        },
+      });
+      await bootstrapServer(server, ctx.providers, ctx.log);
       await ctx.refreshSite();
     },
   },
@@ -76,16 +143,27 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
     run: async (ctx) => {
       const domain = await prisma.domain.findUnique({ where: { siteId: ctx.site.id } });
       if (!domain) throw new Error("Aucun domaine renseigné");
-      if (domain.owned) return { skipped: `${domain.fqdn} est déjà dans le compte Gandi` };
+      if (domain.owned) {
+        try {
+          await verifyOwnedDomain(domain, ctx.providers, ctx.log);
+        } catch (err) {
+          if (!(err instanceof ProviderNotConfiguredError)) throw err;
+          return { skipped: "Gandi non configuré : domaine géré manuellement" };
+        }
+        return { skipped: `${domain.fqdn} est déjà dans le compte Gandi` };
+      }
       if (domain.orderStatus === "registered") return { skipped: "déjà enregistré" };
+      if (!ctx.deployment.domainPurchaseConfirmedById)
+        throw new Error("L'achat du domaine doit être confirmé par un administrateur (étape 1).");
       try {
-        await registerDomain(domain, ctx.providers, ctx.settings, ctx.log);
+        await registerDomain(domain, ctx.providers, ctx.settings, ctx.log, {
+          confirmedById: ctx.deployment.domainPurchaseConfirmedById,
+        });
       } catch (err) {
         if (!(err instanceof ProviderNotConfiguredError)) throw err;
         await ctx.log.warn(
           `${err.message} Le domaine ${domain.fqdn} doit être acheté et géré manuellement.`,
         );
-        await prisma.domain.update({ where: { id: domain.id }, data: { owned: true } });
         return { skipped: "Gandi non configuré : domaine géré manuellement" };
       }
     },
@@ -100,10 +178,7 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
         where: { id: ctx.site.id },
         data: { previewHost: previewHostFor(ctx.site.slug, ctx.settings) },
       });
-      try {
-        await configureDns(domain, ctx.site.slug, server, ctx.providers, ctx.settings, ctx.log);
-      } catch (err) {
-        if (!(err instanceof ProviderNotConfiguredError)) throw err;
+      const manual = async (reason: string) => {
         const records = expectedDnsRecords(
           domain.fqdn,
           ctx.site.slug,
@@ -111,9 +186,23 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
           ctx.settings,
         );
         await ctx.log.warn(
-          `${err.message} Créez ces enregistrements A à la main : ${describeRecords(records)}`,
+          `${reason} Créez ces enregistrements A à la main : ${describeRecords(records)}`,
         );
         return { skipped: `DNS manuel : ${describeRecords(records)}` };
+      };
+      if (domain.owned && !domain.orderId) {
+        try {
+          const info = await ctx.providers.domain.getDomain(domain.fqdn);
+          if (info && !info.usesProviderDns) return manual(`${domain.fqdn} n'utilise pas LiveDNS.`);
+        } catch (err) {
+          if (!(err instanceof ProviderNotConfiguredError)) throw err;
+        }
+      }
+      try {
+        await configureDns(domain, ctx.site.slug, server, ctx.providers, ctx.settings, ctx.log);
+      } catch (err) {
+        if (!(err instanceof ProviderNotConfiguredError)) throw err;
+        return manual(err.message);
       }
     },
   },
@@ -141,33 +230,64 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
       await ctx.log.info(`Création des dossiers du site sur ${server.name}`);
       await ctx.providers.agent.ensureSiteDirs(serverRef(server), ctx.site.slug);
       await ctx.providers.agent.ensureSiteDirs(serverRef(server), `${ctx.site.slug}--preview`);
-      await prisma.site.update({ where: { id: ctx.site.id }, data: { status: "ready" } });
+      await prisma.site.update({
+        where: { id: ctx.site.id },
+        data: { status: ctx.site.liveReleaseId ? "live" : "ready" },
+      });
       await ctx.log.success("Infrastructure prête. Vous pouvez déposer le site.");
     },
   },
 ];
 
+/**
+ * Starts (or resumes) the provision of a site. The admin confirmations of the
+ * paid actions are stored on the deployment: a later retry reuses them and can
+ * never escalate a manager's click into a purchase.
+ */
 export async function startProvision(
   siteId: string,
   userId: string | null,
-  opts: { confirmServerOrder: boolean; zipBytes?: number },
+  opts: {
+    serverOrderConfirmedById?: string | null;
+    serverOrderMaxPrice?: number | null;
+    domainPurchaseConfirmedById?: string | null;
+    zipBytes?: number;
+  },
 ) {
-  const existing = await prisma.deployment.findFirst({
-    where: { siteId, kind: "provision", status: { in: ["queued", "running", "failed"] } },
+  const failed = await prisma.deployment.findFirst({
+    where: { siteId, kind: "provision", status: "failed" },
     orderBy: { createdAt: "desc" },
   });
-  const deployment = existing ?? (await createDeployment(siteId, "provision", null, null, userId));
-  if (existing?.status === "failed") {
-    await prisma.deployment.update({
-      where: { id: existing.id },
-      data: { status: "queued", error: null },
+  let deployment: Deployment;
+  if (failed) {
+    const claimed = await prisma.deployment.updateMany({
+      where: { id: failed.id, status: "failed" },
+      data: {
+        status: "queued",
+        error: null,
+        serverOrderConfirmedById: opts.serverOrderConfirmedById ?? failed.serverOrderConfirmedById,
+        serverOrderMaxPrice: opts.serverOrderMaxPrice ?? failed.serverOrderMaxPrice,
+        domainPurchaseConfirmedById:
+          opts.domainPurchaseConfirmedById ?? failed.domainPurchaseConfirmedById,
+      },
+    });
+    if (claimed.count === 0) throw new DeploymentBusyError();
+    deployment = await prisma.deployment.findUniqueOrThrow({ where: { id: failed.id } });
+  } else {
+    deployment = await createExclusiveDeployment({
+      siteId,
+      kind: "provision",
+      environment: null,
+      releaseId: null,
+      userId,
+      ...opts,
     });
   }
   await prisma.site.update({ where: { id: siteId }, data: { status: "provisioning" } });
   await enqueue(
     QUEUES.provision,
-    { deploymentId: deployment.id, ...opts } satisfies ProvisionPayload,
-    { singletonKey: deployment.id },
+    { deploymentId: deployment.id, zipBytes: opts.zipBytes } satisfies ProvisionPayload,
+    { singletonKey: `${deployment.id}:${Date.now()}` },
   );
   return deployment;
 }
@@ -181,7 +301,7 @@ export async function runProvision(payload: ProvisionPayload) {
 const stagingSteps: StepDefinition[] = [
   {
     key: "push",
-    label: "Envoi sur GitHub (staging)",
+    label: "Envoi sur GitHub (préproduction)",
     run: async (ctx) => {
       const release = await prisma.release.findUniqueOrThrow({
         where: { id: ctx.deployment.releaseId! },
@@ -222,11 +342,20 @@ const stagingSteps: StepDefinition[] = [
         where: { id: ctx.site.id },
         data: {
           stagingReleaseId: release.id,
-          status: ctx.site.status === "live" ? "live" : "preview",
+          // A site in production stays in production while a new version is reviewed.
+          status: ctx.site.liveReleaseId ? "live" : "preview",
           previewHost: previewHostFor(ctx.site.slug, ctx.settings),
         },
       });
       await ctx.refreshSite();
+      await pruneOldReleases({
+        site: ctx.site,
+        server,
+        environment: "staging",
+        keepReleaseIds: [release.id],
+        providers: ctx.providers,
+        log: ctx.log,
+      });
     },
   },
   {
@@ -245,14 +374,20 @@ const stagingSteps: StepDefinition[] = [
     key: "screenshot",
     label: "Capture d'écran",
     run: async (ctx) => {
-      if (ctx.site.status === "live") return { skipped: "la capture de production est conservée" };
+      if (ctx.site.liveReleaseId) return { skipped: "la capture de production est conservée" };
       await captureScreenshot(ctx.site, "staging", ctx.providers, ctx.settings, ctx.log);
     },
   },
 ];
 
 export async function startStagingDeploy(siteId: string, releaseId: string, userId: string | null) {
-  const deployment = await createDeployment(siteId, "deploy", "staging", releaseId, userId);
+  const deployment = await createExclusiveDeployment({
+    siteId,
+    kind: "deploy",
+    environment: "staging",
+    releaseId,
+    userId,
+  });
   await enqueue(QUEUES.deploy, { deploymentId: deployment.id } satisfies DeployPayload, {
     singletonKey: deployment.id,
   });
@@ -265,32 +400,39 @@ export async function runStagingDeploy(payload: DeployPayload) {
 
 // ---------- Promote (production) ----------
 
+/** Unique and readable production tag, e.g. prod-v4-20260924-1402. */
+export function productionTag(version: number, now = new Date(), suffix = ""): string {
+  const stamp = now
+    .toISOString()
+    .slice(0, 16)
+    .replace(/[-:T]/g, "")
+    .replace(/(\d{8})(\d{4})/, "$1-$2");
+  return `prod-v${version}-${stamp}${suffix}`;
+}
+
 const promoteSteps: StepDefinition[] = [
   {
     key: "merge",
-    label: "Fusion staging → production",
+    label: "Version de production sur GitHub",
     run: async (ctx) => {
       const release = await prisma.release.findUniqueOrThrow({
         where: { id: ctx.deployment.releaseId! },
       });
       if (release.gitTag) return { skipped: `tag ${release.gitTag} existant` };
-      if (!ctx.site.gitRepo) {
+      if (!ctx.site.gitRepo || !release.commitSha) {
         await prisma.release.update({
           where: { id: release.id },
           data: { gitTag: `local-v${release.version}` },
         });
         return { skipped: "pas de dépôt GitHub, version marquée localement" };
       }
-      const tag = `prod-${new Date()
-        .toISOString()
-        .slice(0, 16)
-        .replace(/[-:T]/g, "")
-        .replace(/(\d{8})(\d{4})/, "$1-$2")}`;
-      const res = await ctx.providers.git.promote({ repo: ctx.site.gitRepo, tag });
-      await prisma.release.update({
-        where: { id: release.id },
-        data: { gitTag: res.tag, commitSha: release.commitSha ?? res.commitSha },
+      // The exact commit of this release, never whatever staging points to now.
+      const res = await ctx.providers.git.promote({
+        repo: ctx.site.gitRepo,
+        tag: productionTag(release.version),
+        commitSha: release.commitSha,
       });
+      await prisma.release.update({ where: { id: release.id }, data: { gitTag: res.tag } });
       await ctx.log.success(`Branche production à jour, tag ${res.tag}`);
     },
   },
@@ -316,6 +458,14 @@ const promoteSteps: StepDefinition[] = [
         data: { liveReleaseId: release.id, status: "live", lastPublishedAt: new Date() },
       });
       await ctx.refreshSite();
+      await pruneOldReleases({
+        site: ctx.site,
+        server,
+        environment: "production",
+        keepReleaseIds: [release.id, ...(await productionKeepList(ctx.site.id))],
+        providers: ctx.providers,
+        log: ctx.log,
+      });
     },
   },
   {
@@ -337,7 +487,13 @@ const promoteSteps: StepDefinition[] = [
 ];
 
 export async function startPromote(siteId: string, releaseId: string, userId: string | null) {
-  const deployment = await createDeployment(siteId, "promote", "production", releaseId, userId);
+  const deployment = await createExclusiveDeployment({
+    siteId,
+    kind: "promote",
+    environment: "production",
+    releaseId,
+    userId,
+  });
   await enqueue(QUEUES.promote, { deploymentId: deployment.id } satisfies DeployPayload, {
     singletonKey: deployment.id,
   });
@@ -359,29 +515,34 @@ const rollbackSteps: StepDefinition[] = [
         where: { id: ctx.deployment.releaseId! },
       });
       const server = await prisma.server.findUniqueOrThrow({ where: { id: ctx.site.serverId! } });
-      await deployRelease({
-        site: ctx.site,
-        server,
-        release,
-        environment: "production",
-        providers: ctx.providers,
-        settings: ctx.settings,
-        log: ctx.log,
+      // Instant when the release is still on the server; otherwise it is sent again.
+      const switched = await runtimeFor(ctx.site.runtime).rollback(ctx.providers.agent, {
+        server: serverRef(server),
+        slug: ctx.site.slug,
+        releaseId: release.id,
+        log: (m) => ctx.log.info(m),
       });
+      if (!switched) {
+        await ctx.log.info("Version absente du serveur : nouvel envoi");
+        await deployRelease({
+          site: ctx.site,
+          server,
+          release,
+          environment: "production",
+          providers: ctx.providers,
+          settings: ctx.settings,
+          log: ctx.log,
+        });
+      }
       await prisma.site.update({
         where: { id: ctx.site.id },
         data: { liveReleaseId: release.id, status: "live", lastPublishedAt: new Date() },
       });
       await ctx.log.success(`Version ${release.version} remise en ligne`);
       if (ctx.site.gitRepo && release.commitSha) {
-        const tag = `prod-${new Date()
-          .toISOString()
-          .slice(0, 16)
-          .replace(/[-:T]/g, "")
-          .replace(/(\d{8})(\d{4})/, "$1-$2")}-retour`;
         const res = await ctx.providers.git.promote({
           repo: ctx.site.gitRepo,
-          tag,
+          tag: productionTag(release.version, new Date(), "-retour"),
           commitSha: release.commitSha,
         });
         await ctx.log.info(
@@ -403,16 +564,16 @@ export async function startRollback(
   siteId: string,
   releaseId: string,
   userId: string | null,
-  rollbackOfId: string,
+  rollbackOfId: string | null,
 ) {
-  const deployment = await createDeployment(
+  const deployment = await createExclusiveDeployment({
     siteId,
-    "rollback",
-    "production",
+    kind: "rollback",
+    environment: "production",
     releaseId,
     userId,
     rollbackOfId,
-  );
+  });
   await enqueue(QUEUES.rollback, { deploymentId: deployment.id } satisfies DeployPayload, {
     singletonKey: deployment.id,
   });
@@ -423,11 +584,28 @@ export async function runRollback(payload: DeployPayload) {
   await runPipeline(payload.deploymentId, rollbackSteps);
 }
 
-/** Re-sends a failed deployment to its queue; the pipeline resumes at the failed step. */
-export async function retryDeployment(deploymentId: string) {
+/**
+ * Re-queues a failed deployment; the pipeline resumes at the failed step with
+ * the confirmations recorded when it was started. `confirm` records a new admin
+ * confirmation to order a server (the caller checks the role and audits it).
+ */
+export async function retryDeployment(
+  deploymentId: string,
+  confirm?: { serverOrderConfirmedById: string; serverOrderMaxPrice: number | null },
+) {
   const d = await prisma.deployment.findUniqueOrThrow({ where: { id: deploymentId } });
   if (d.status !== "failed") return d;
-  await prisma.deployment.update({ where: { id: d.id }, data: { status: "queued", error: null } });
+  const busy = await prisma.deployment.findFirst({
+    where: { siteId: d.siteId, id: { not: d.id }, status: { in: ["queued", "running"] } },
+    select: { id: true },
+  });
+  if (busy) throw new DeploymentBusyError();
+  // Only one of two simultaneous clicks re-queues the deployment.
+  const claimed = await prisma.deployment.updateMany({
+    where: { id: d.id, status: "failed" },
+    data: { status: "queued", error: null, ...(confirm ?? {}) },
+  });
+  if (claimed.count === 0) return d;
   const queue = {
     provision: QUEUES.provision,
     deploy: QUEUES.deploy,
@@ -436,10 +614,6 @@ export async function retryDeployment(deploymentId: string) {
   }[d.kind];
   if (d.kind === "provision")
     await prisma.site.update({ where: { id: d.siteId }, data: { status: "provisioning" } });
-  await enqueue(
-    queue,
-    { deploymentId: d.id, confirmServerOrder: true },
-    { singletonKey: `${d.id}:${Date.now()}` },
-  );
+  await enqueue(queue, { deploymentId: d.id }, { singletonKey: `${d.id}:${Date.now()}` });
   return d;
 }

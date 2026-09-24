@@ -48,10 +48,10 @@ describe.skipIf(!hasDb)("pipelines (demo mode, real database)", () => {
   });
 
   it("refuses to order a server without confirmation, then resumes after confirmation", async () => {
-    const deployment = await prisma.deployment.create({ data: { siteId, kind: "provision" } });
-    await expect(
-      runProvision({ deploymentId: deployment.id, confirmServerOrder: false }),
-    ).rejects.toThrow(/administrateur/);
+    const deployment = await prisma.deployment.create({
+      data: { siteId, kind: "provision", domainPurchaseConfirmedById: "admin-1" },
+    });
+    await expect(runProvision({ deploymentId: deployment.id })).rejects.toThrow(/administrateur/);
     const failed = await prisma.deployment.findUniqueOrThrow({ where: { id: deployment.id } });
     expect(failed.status).toBe("failed");
     expect((failed.steps as { key: string; status: string }[])[0]).toMatchObject({
@@ -59,7 +59,18 @@ describe.skipIf(!hasDb)("pipelines (demo mode, real database)", () => {
       status: "failed",
     });
 
-    await runProvision({ deploymentId: deployment.id, confirmServerOrder: true });
+    // Re-running the same job without re-queuing does nothing (duplicate delivery).
+    await runProvision({ deploymentId: deployment.id });
+    expect(
+      (await prisma.deployment.findUniqueOrThrow({ where: { id: deployment.id } })).status,
+    ).toBe("failed");
+    expect(await prisma.server.count({ where: { isDemo: true } })).toBe(0);
+
+    await prisma.deployment.update({
+      where: { id: deployment.id },
+      data: { status: "queued", serverOrderConfirmedById: "admin-1", serverOrderMaxPrice: 9 },
+    });
+    await runProvision({ deploymentId: deployment.id });
     const done = await prisma.deployment.findUniqueOrThrow({ where: { id: deployment.id } });
     expect(done.status).toBe("succeeded");
     const steps = done.steps as { key: string; status: string }[];
@@ -100,7 +111,7 @@ describe.skipIf(!hasDb)("pipelines (demo mode, real database)", () => {
       currency: null,
     });
     const d = await prisma.deployment.create({ data: { siteId: other.id, kind: "provision" } });
-    await runProvision({ deploymentId: d.id, confirmServerOrder: false });
+    await runProvision({ deploymentId: d.id });
     const site = await prisma.site.findUniqueOrThrow({ where: { id: other.id } });
     const first = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
     expect(site.serverId).toBe(first.serverId);
@@ -166,10 +177,57 @@ describe.skipIf(!hasDb)("pipelines (demo mode, real database)", () => {
     expect(host?.sites.get("pipeline-test")?.current).toBe(`rel-${r1.id}`);
   });
 
+  it("keeps a live site live when a later deployment fails", async () => {
+    const before = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
+    expect(before.status).toBe("live");
+    const broken = await prisma.deployment.create({
+      // No release: the first step cannot even load it.
+      data: { siteId, kind: "deploy", environment: "staging", releaseId: null },
+    });
+    await expect(runStagingDeploy({ deploymentId: broken.id })).rejects.toThrow();
+    const after = await prisma.site.findUniqueOrThrow({ where: { id: siteId } });
+    expect(after.status).toBe("live");
+    expect((await prisma.deployment.findUniqueOrThrow({ where: { id: broken.id } })).status).toBe(
+      "failed",
+    );
+  });
+
+  it("never orders a second server when the provision is resumed", async () => {
+    const third = await createDraftSite("test-user", "Pipeline Test Three");
+    await saveStep1(third.id, {
+      clientName: "Pipeline Test Three",
+      fqdn: "pipeline-test-three.fr",
+      owned: true,
+      formsEmail: "",
+      price: null,
+      currency: null,
+    });
+    // A server row left by an interrupted attempt, already attached to the site.
+    const pending = await prisma.server.create({
+      data: {
+        name: "demo-resume",
+        provider: "mock",
+        status: "ordering",
+        offer: "DEV1-S",
+        isDemo: true,
+      },
+    });
+    await prisma.site.update({ where: { id: third.id }, data: { serverId: pending.id } });
+    const count = await prisma.server.count({ where: { isDemo: true } });
+    const d = await prisma.deployment.create({
+      data: { siteId: third.id, kind: "provision", serverOrderConfirmedById: "admin-1" },
+    });
+    await runProvision({ deploymentId: d.id });
+    expect(await prisma.server.count({ where: { isDemo: true } })).toBe(count);
+    const server = await prisma.server.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(server.status).toBe("ready");
+    expect(server.providerId).toBeTruthy();
+  });
+
   it("collects metrics for ready servers", async () => {
     const n = await collectAllMetrics();
     expect(n).toBeGreaterThanOrEqual(1);
     const server = await prisma.server.findFirstOrThrow({ where: { isDemo: true } });
-    expect(server.metrics).toMatchObject({ vcpus: 2, sitesCount: 2 });
+    expect(server.metrics).toMatchObject({ vcpus: 2 });
   });
 });

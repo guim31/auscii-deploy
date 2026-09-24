@@ -2,6 +2,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 const ALGO = "aes-256-gcm";
 const VERSION = "v1";
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
 
 function keyFromHex(hex: string): Buffer {
   const key = Buffer.from(hex, "hex");
@@ -12,8 +14,8 @@ function keyFromHex(hex: string): Buffer {
 /** Encrypts a UTF-8 string. Output format: v1.<iv>.<tag>.<ciphertext>, all base64url. */
 export function encrypt(plain: string, keyHex: string): string {
   const key = keyFromHex(keyHex);
-  const iv = randomBytes(12);
-  const cipher = createCipheriv(ALGO, key, iv);
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv(ALGO, key, iv, { authTagLength: TAG_BYTES });
   const enc = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   return [
@@ -29,8 +31,13 @@ export function decrypt(payload: string, keyHex: string): string {
   if (version !== VERSION || !ivB64 || !tagB64 || !dataB64)
     throw new Error("Malformed encrypted payload");
   const key = keyFromHex(keyHex);
-  const decipher = createDecipheriv(ALGO, key, Buffer.from(ivB64, "base64url"));
-  decipher.setAuthTag(Buffer.from(tagB64, "base64url"));
+  const iv = Buffer.from(ivB64, "base64url");
+  const tag = Buffer.from(tagB64, "base64url");
+  // A truncated tag would weaken the authentication: refuse anything but the full size.
+  if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES)
+    throw new Error("Malformed encrypted payload");
+  const decipher = createDecipheriv(ALGO, key, iv, { authTagLength: TAG_BYTES });
+  decipher.setAuthTag(tag);
   const dec = Buffer.concat([decipher.update(Buffer.from(dataB64, "base64url")), decipher.final()]);
   return dec.toString("utf8");
 }

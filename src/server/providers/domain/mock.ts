@@ -30,6 +30,11 @@ function splitFqdn(fqdn: string): { label: string; tld: string } {
   return { label: parts.join("."), tld };
 }
 
+function isValidName(fqdn: string): boolean {
+  const { label, tld } = splitFqdn(fqdn);
+  return Boolean(label && tld);
+}
+
 export class MockDomainProvider implements DomainProvider {
   readonly name = "mock-gandi";
 
@@ -85,7 +90,8 @@ export class MockDomainProvider implements DomainProvider {
   async getDomain(fqdn: string): Promise<OwnedDomain | null> {
     await sleep(300);
     const name = fqdn.toLowerCase();
-    if (!owned.has(name)) return null;
+    // The demo trusts the manager: a domain declared as already owned is in the account.
+    if (!isValidName(name)) return null;
     const expiresAt = new Date();
     expiresAt.setFullYear(expiresAt.getFullYear() + 1);
     return { fqdn: name, status: "active", expiresAt, usesProviderDns: true };

@@ -30,11 +30,13 @@ export function formMessage(
   };
 }
 
-/** Queues the email of a submission. Idempotent per submission thanks to the singleton key. */
+/**
+ * Queues the email of a submission. Sending twice is harmless: the handler
+ * skips a submission already emailed, and the provider deduplicates by the
+ * idempotency key if a send timed out after being accepted.
+ */
 export async function queueSubmissionMail(submissionId: string): Promise<void> {
-  await enqueue(QUEUES.mailSend, { kind: "form", submissionId } satisfies MailSendPayload, {
-    singletonKey: `form:${submissionId}`,
-  });
+  await enqueue(QUEUES.mailSend, { kind: "form", submissionId } satisfies MailSendPayload);
 }
 
 /**
@@ -42,7 +44,6 @@ export async function queueSubmissionMail(submissionId: string): Promise<void> {
  * (logged, no retry); any other failure throws so pg-boss retries later.
  */
 export async function runMailSend(payload: MailSendPayload): Promise<void> {
-  const providers = await getProviders();
   if (payload.kind === "form") {
     const submission = await prisma.formSubmission.findUnique({
       where: { id: payload.submissionId },
@@ -50,8 +51,13 @@ export async function runMailSend(payload: MailSendPayload): Promise<void> {
     });
     if (!submission || submission.emailedAt) return;
     if (!submission.site.formsEmail) return;
+    // A demo site never sends real emails, a real site never goes through the mock.
+    const providers = await getProviders({ demo: submission.site.isDemo });
     try {
-      await providers.mail.send(formMessage(submission, submission.site));
+      await providers.mail.send({
+        ...formMessage(submission, submission.site),
+        idempotencyKey: `form-${submission.id}`,
+      });
     } catch (err) {
       if (err instanceof ProviderNotConfiguredError) {
         console.warn(`[mail] message ${submission.id} non transmis : ${err.message}`);
@@ -77,11 +83,13 @@ export async function runMailSend(payload: MailSendPayload): Promise<void> {
     });
     return;
   }
+  const providers = await getProviders({ demo: alert.isDemo });
   try {
     await providers.mail.send({
       to,
       subject: `[${settings.agencyName}] ${alert.subject}`,
       text: alert.body,
+      idempotencyKey: `alert-${alert.id}`,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

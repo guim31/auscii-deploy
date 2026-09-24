@@ -6,6 +6,11 @@ describe("slugify", () => {
     expect(slugify("Boulangerie Dupont & Fils")).toBe("boulangerie-dupont-fils");
     expect(slugify("  Château d'Ébène  ")).toBe("chateau-d-ebene");
   });
+  it("spells out French ligatures", () => {
+    expect(slugify("Sœurs Martin")).toBe("soeurs-martin");
+    expect(slugify("Cœur de Lion")).toBe("coeur-de-lion");
+    expect(slugify("L'Æther")).toBe("l-aether");
+  });
   it("caps the length", () => {
     expect(slugify("a".repeat(80)).length).toBeLessThanOrEqual(40);
   });
@@ -14,6 +19,13 @@ describe("slugify", () => {
 describe("fqdn", () => {
   it("normalizes user input", () => {
     expect(normalizeFqdn(" https://www.Dupont-Boulangerie.FR/ ")).toBe("dupont-boulangerie.fr");
+    expect(normalizeFqdn("dupont.fr.")).toBe("dupont.fr");
+    expect(normalizeFqdn("dupont.fr:443/contact")).toBe("dupont.fr");
+  });
+  it("converts accented domains to punycode", () => {
+    const ascii = normalizeFqdn("boulangerie-été.fr");
+    expect(ascii.startsWith("xn--")).toBe(true);
+    expect(isValidFqdn(ascii)).toBe(true);
   });
   it("validates", () => {
     expect(isValidFqdn("dupont.fr")).toBe(true);

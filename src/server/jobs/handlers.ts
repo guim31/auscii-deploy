@@ -9,7 +9,14 @@ import {
   type DeployPayload,
   type ProvisionPayload,
 } from "./pipelines";
-import { checkAllCertificates, collectAllMetrics, orderStandaloneServer } from "./maintenance";
+import {
+  checkAllCertificates,
+  collectAllMetrics,
+  resendPendingAlerts,
+  runStandaloneOrder,
+  type ServerOrderPayload,
+} from "./maintenance";
+import { failInterruptedDeployments } from "./pipeline";
 import { refreshAllDomains } from "./domain-refresh";
 import { generateAiReport, type AiReportPayload } from "./ai-report";
 import { runServerBootstrap, type ServerBootstrapPayload } from "./steps/register-server";
@@ -49,9 +56,9 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   await boss.work<AiReportPayload>(QUEUES.aiReport, workOptions, async (jobs) =>
     generateAiReport(one(jobs)),
   );
-  await boss.work<{ offerId?: string }>(QUEUES.serverOrder, workOptions, async (jobs) => {
-    await orderStandaloneServer(one(jobs).offerId);
-  });
+  await boss.work<ServerOrderPayload>(QUEUES.serverOrder, workOptions, async (jobs) =>
+    runStandaloneOrder(one(jobs)),
+  );
   await boss.work<ServerBootstrapPayload>(QUEUES.serverBootstrap, workOptions, async (jobs) =>
     runServerBootstrap(one(jobs)),
   );
@@ -63,6 +70,9 @@ export async function registerHandlers(boss: PgBoss): Promise<void> {
   );
   await boss.work(QUEUES.serverHealth, { ...workOptions, pollingIntervalSeconds: 10 }, async () => {
     await collectAllMetrics();
+    // Hourly housekeeping: alerts never emailed, deployments stuck beyond the job expiry.
+    await resendPendingAlerts();
+    await failInterruptedDeployments(3.5 * 60 * 60 * 1000);
   });
   await boss.work(QUEUES.sslCheck, { ...workOptions, pollingIntervalSeconds: 10 }, async () => {
     await checkAllCertificates();

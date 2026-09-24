@@ -38,6 +38,18 @@ describe("productionIssues", () => {
     expect(issues.join(" ")).toContain("APP_ENCRYPTION_KEY");
   });
 
+  it("refuses a short session secret and a preview origin on the tool's domain", () => {
+    expect(productionIssues({ ...base, BETTER_AUTH_SECRET: "a".repeat(20) })[0]).toContain(
+      "BETTER_AUTH_SECRET",
+    );
+    expect(
+      productionIssues({ ...base, PREVIEW_ORIGIN: "https://apercu.auscii.site" })[0],
+    ).toContain("PREVIEW_ORIGIN");
+    expect(
+      productionIssues({ ...base, PREVIEW_ORIGIN: "https://apercu.auscii-preview.site" }),
+    ).toEqual([]);
+  });
+
   it("refuses plain HTTP on a public host", () => {
     const issues = productionIssues({ ...base, APP_URL: "http://deploy.auscii.site" });
     expect(issues).toHaveLength(1);

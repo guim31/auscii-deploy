@@ -3,9 +3,14 @@ loadEnv();
 
 import { startBoss } from "../server/jobs/boss";
 import { registerHandlers } from "../server/jobs/handlers";
+import { failInterruptedDeployments } from "../server/jobs/pipeline";
 
 async function main() {
-  const boss = await startBoss();
+  const boss = await startBoss("worker");
+  // Nothing runs yet: a deployment still "running" was cut by the previous stop.
+  const interrupted = await failInterruptedDeployments();
+  if (interrupted > 0)
+    console.warn(`[worker] ${interrupted} déploiement(s) interrompu(s) marqué(s) en échec`);
   await registerHandlers(boss);
   console.log("[worker] prêt, en attente de jobs");
 

@@ -9,7 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { saveIntegrationAction, testIntegrationAction } from "@/server/actions/settings";
+import {
+  deleteIntegrationAction,
+  saveIntegrationAction,
+  testIntegrationAction,
+} from "@/server/actions/settings";
 import type { IntegrationName } from "@/server/providers";
 import { formatDateTime } from "@/lib/format";
 import { ResendDomainPanel } from "./resend-domain-panel";
@@ -20,14 +24,15 @@ export type IntegrationState = {
   updatedAt: string | null;
   lastTestAt: string | null;
   lastTestOk: boolean | null;
+  /** Saved values of the non-secret fields (organisation, identifiers…), shown for editing. */
+  values: Record<string, string>;
 };
 
 const FIELDS: Record<
-  IntegrationName,
+  Exclude<IntegrationName, "ssh">,
   {
     title: string;
     description: string;
-    phase: string;
     fields: {
       key: string;
       label: string;
@@ -41,7 +46,6 @@ const FIELDS: Record<
     title: "Gandi",
     description:
       "Achat des domaines et DNS (LiveDNS). Jeton personnel (PAT) avec les droits « Voir et renouveler les domaines », « Acheter des domaines » et « Gérer les enregistrements LiveDNS ».",
-    phase: "phase 3",
     fields: [
       { key: "apiKey", label: "Personal Access Token", secret: true },
       {
@@ -54,8 +58,7 @@ const FIELDS: Record<
   scaleway: {
     title: "Scaleway",
     description:
-      "Commande et suppression des serveurs (Instances). Clé API IAM avec la permission InstancesFullAccess sur le projet, et l'identifiant du projet (UUID).",
-    phase: "phase 4 (livrée)",
+      "Commande et suppression des serveurs (Instances). Clé API IAM avec les permissions InstancesFullAccess et BlockStorageFullAccess sur le projet, et l'identifiant du projet (UUID).",
     fields: [
       { key: "secretKey", label: "Secret key", secret: true },
       { key: "projectId", label: "Project ID" },
@@ -65,7 +68,6 @@ const FIELDS: Record<
     title: "GitHub",
     description:
       "GitHub App installée sur l'organisation, un dépôt privé par site. Permissions : Contents (lecture/écriture), Administration (lecture/écriture), Metadata (lecture). L'Installation ID est dans l'URL de la page d'installation.",
-    phase: "phase 5 (livrée)",
     fields: [
       { key: "org", label: "Organisation", placeholder: "auscii" },
       { key: "appId", label: "App ID" },
@@ -77,7 +79,6 @@ const FIELDS: Record<
     title: "Resend",
     description:
       "Messages des formulaires de contact et alertes à l'agence. Clé API avec accès complet (les domaines sont gérés depuis l'outil).",
-    phase: "phase 6 (livrée)",
     fields: [
       { key: "apiKey", label: "API key", secret: true },
       {
@@ -91,20 +92,9 @@ const FIELDS: Record<
     title: "Anthropic",
     description:
       "Rapport de relecture Claude à l'étape 3 (SEO, accessibilité, contenu). Clé API de la console Anthropic ; le modèle est facultatif.",
-    phase: "phase 7 (livrée)",
     fields: [
       { key: "apiKey", label: "API key", secret: true },
       { key: "model", label: "Modèle (facultatif)", placeholder: "claude-opus-5 par défaut" },
-    ],
-  },
-  ssh: {
-    title: "SSH du pilote",
-    description:
-      "Paire de clés utilisée pour piloter les serveurs. La clé publique est injectée dans chaque serveur commandé.",
-    phase: "phase 2",
-    fields: [
-      { key: "publicKey", label: "Clé publique", multiline: true },
-      { key: "privateKey", label: "Clé privée", secret: true, multiline: true },
     ],
   },
 };
@@ -112,8 +102,8 @@ const FIELDS: Record<
 type MailContext = { techDomain: string; defaultSender: string };
 
 function IntegrationCard({ state, mail }: { state: IntegrationState; mail: MailContext }) {
-  const def = FIELDS[state.name];
-  const [values, setValues] = useState<Record<string, string>>({});
+  const def = FIELDS[state.name as Exclude<IntegrationName, "ssh">];
+  const [values, setValues] = useState<Record<string, string>>(state.values);
   const [pending, startTransition] = useTransition();
 
   function save() {
@@ -122,6 +112,27 @@ function IntegrationCard({ state, mail }: { state: IntegrationState; mail: MailC
       if (!res.ok) toast.error(res.error);
       else {
         toast.success(`${def.title} enregistré`);
+        // Secrets are never shown back; the other fields keep what was saved.
+        setValues(
+          Object.fromEntries(
+            def.fields.filter((f) => !f.secret).map((f) => [f.key, values[f.key] ?? ""]),
+          ),
+        );
+      }
+    });
+  }
+  function remove() {
+    if (
+      !window.confirm(
+        `Supprimer les clés ${def.title} ? Les fonctions qui en dépendent s'arrêteront.`,
+      )
+    )
+      return;
+    startTransition(async () => {
+      const res = await deleteIntegrationAction(state.name);
+      if (!res.ok) toast.error(res.error);
+      else {
+        toast.success(`${def.title} supprimé`);
         setValues({});
       }
     });
@@ -146,9 +157,6 @@ function IntegrationCard({ state, mail }: { state: IntegrationState; mail: MailC
           ) : (
             <Badge variant="outline">Non configurée</Badge>
           )}
-          <span className="text-muted-foreground ml-auto text-xs font-normal">
-            intégration réelle en {def.phase}
-          </span>
         </CardTitle>
         <CardDescription>
           {def.description}
@@ -171,7 +179,11 @@ function IntegrationCard({ state, mail }: { state: IntegrationState; mail: MailC
                 id={`${state.name}-${f.key}`}
                 value={values[f.key] ?? ""}
                 onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
-                placeholder={state.configured && f.secret ? "•••••• (enregistrée)" : f.placeholder}
+                placeholder={
+                  state.configured && f.secret
+                    ? "•••••• (enregistrée, laissez vide pour la garder)"
+                    : f.placeholder
+                }
                 className="font-mono text-xs"
                 rows={3}
               />
@@ -182,12 +194,21 @@ function IntegrationCard({ state, mail }: { state: IntegrationState; mail: MailC
                 autoComplete="off"
                 value={values[f.key] ?? ""}
                 onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
-                placeholder={state.configured && f.secret ? "•••••• (enregistrée)" : f.placeholder}
+                placeholder={
+                  state.configured && f.secret
+                    ? "•••••• (enregistrée, laissez vide pour la garder)"
+                    : f.placeholder
+                }
               />
             )}
           </div>
         ))}
         <div className="flex justify-end gap-2">
+          {state.configured && (
+            <Button variant="ghost" onClick={remove} disabled={pending} className="mr-auto">
+              Supprimer
+            </Button>
+          )}
           <Button variant="outline" onClick={test} disabled={pending || !state.configured}>
             Tester
           </Button>

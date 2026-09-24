@@ -7,13 +7,15 @@ import { env } from "../env";
 import { encryptJson } from "../crypto";
 import { getCurrentUser } from "../session";
 import { audit } from "../audit";
-import { getSettings, setSetting, type Settings } from "../settings";
+import { getSettings, isDemoMode, setSetting, type Settings } from "../settings";
 import { INTEGRATIONS, type DnsRecord, type IntegrationName } from "../providers";
 import type { SendingDomainStatus } from "../providers/mail/resend";
 import { resetDemo, seedDemo } from "../demo/seed";
-import { enqueue, QUEUES } from "../jobs/boss";
 import { collectAllMetrics } from "../jobs/maintenance";
 import { createUserWithPassword } from "../users";
+import { mergeIntegrationFields } from "../integrations";
+import { matchesCurrentMode, OTHER_MODE_ERROR } from "../mode";
+import { isValidFqdn } from "@/lib/slug";
 
 type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -24,6 +26,7 @@ async function admin(): Promise<{ id: string; email: string } | null> {
 
 export async function toggleDemoAction(on: boolean): Promise<{ error?: string }> {
   if (!(await admin())) return { error: "Réservé aux administrateurs" };
+  if (typeof on !== "boolean") return { error: "Valeur invalide" };
   if (env().DEMO_MODE && !on)
     return { error: "Le mode démo est forcé par la configuration (DEMO_MODE=true)" };
   await setSetting("demoMode", on);
@@ -41,7 +44,7 @@ export async function resetDemoAction(): Promise<Result> {
   return { ok: true };
 }
 
-const integrationSchema = z.record(z.string(), z.string());
+const integrationSchema = z.record(z.string().max(40), z.string().max(20_000));
 
 export async function saveIntegrationAction(
   provider: IntegrationName,
@@ -49,21 +52,38 @@ export async function saveIntegrationAction(
 ): Promise<Result> {
   const user = await admin();
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
-  if (!INTEGRATIONS.includes(provider)) return { ok: false, error: "Intégration inconnue" };
+  if (!INTEGRATIONS.includes(provider) || provider === "ssh")
+    return { ok: false, error: "Intégration inconnue" };
   const parsed = integrationSchema.safeParse(fields);
   if (!parsed.success) return { ok: false, error: "Champs invalides" };
-  const clean = Object.fromEntries(Object.entries(parsed.data).filter(([, v]) => v.trim() !== ""));
-  if (Object.keys(clean).length === 0) {
-    await prisma.integration.deleteMany({ where: { provider } });
-  } else {
-    const encrypted = encryptJson(clean, env().APP_ENCRYPTION_KEY);
-    await prisma.integration.upsert({
-      where: { provider },
-      create: { provider, encrypted },
-      update: { encrypted, lastTestAt: null, lastTestOk: null },
-    });
-  }
-  await audit(user, "integration.save", { target: provider });
+  const { loadCredentials } = await import("../providers");
+  const saved = (await loadCredentials(provider)) as Record<string, string> | null;
+  const merged = mergeIntegrationFields(provider, saved, parsed.data);
+  if (!merged.ok) return merged;
+  if (Object.keys(merged.values).length === 0)
+    return { ok: false, error: "Renseignez au moins la clé." };
+  const encrypted = encryptJson(merged.values, env().APP_ENCRYPTION_KEY);
+  await prisma.integration.upsert({
+    where: { provider },
+    create: { provider, encrypted },
+    update: { encrypted, lastTestAt: null, lastTestOk: null },
+  });
+  await audit(user, "integration.save", {
+    target: provider,
+    details: { fields: Object.keys(parsed.data).filter((k) => parsed.data[k].trim() !== "") },
+  });
+  revalidatePath("/settings/integrations");
+  return { ok: true };
+}
+
+/** Removes the keys of an integration (explicit, never as a side effect of an empty form). */
+export async function deleteIntegrationAction(provider: IntegrationName): Promise<Result> {
+  const user = await admin();
+  if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  if (!INTEGRATIONS.includes(provider) || provider === "ssh")
+    return { ok: false, error: "Intégration inconnue" };
+  await prisma.integration.deleteMany({ where: { provider } });
+  await audit(user, "integration.delete", { target: provider });
   revalidatePath("/settings/integrations");
   return { ok: true };
 }
@@ -76,14 +96,7 @@ export async function testIntegrationAction(
   const settings = await getSettings();
   const row = await prisma.integration.findUnique({ where: { provider } });
   if (!row) return { ok: false, error: "Aucune clé enregistrée" };
-  if (settings.demoMode) {
-    await prisma.integration.update({
-      where: { provider },
-      data: { lastTestAt: new Date(), lastTestOk: true },
-    });
-    revalidatePath("/settings/integrations");
-    return { ok: true, message: "Mode démo : test simulé, clé enregistrée." };
-  }
+  // Always a real, read-only call, demo mode or not: a green check must mean the key works.
   let message: string;
   let ok = true;
   try {
@@ -254,54 +267,114 @@ async function senderFor(settings: Settings): Promise<string> {
   return creds?.from?.trim() || defaultSender(settings.agencyName, settings.techDomain);
 }
 
-const agencySchema = z.object({
-  agencyName: z.string().min(1).max(80),
-  techDomain: z
+const domainField = (label: string) =>
+  z
     .string()
-    .min(3)
-    .max(120)
-    .regex(/^[a-z0-9.-]+$/),
+    .trim()
+    .toLowerCase()
+    .refine((v) => isValidFqdn(v), `${label} : nom de domaine invalide (exemple : auscii.site)`);
+
+const agencySchema = z.object({
+  agencyName: z.string().trim().min(1, "Nom de l'agence requis").max(80),
+  techDomain: domainField("Domaine technique"),
+  previewDomain: domainField("Domaine des préproductions").or(z.literal("")),
   previewSubdomain: z
     .string()
-    .min(1)
-    .max(30)
-    .regex(/^[a-z0-9-]+$/),
-  defaultOffer: z.string().min(1).max(30),
-  defaultZone: z.string().min(1).max(30),
-  alertEmail: z.string().email().or(z.literal("")),
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/, "Sous-domaine des préproductions invalide"),
+  defaultOffer: z.string().trim().min(1, "Offre par défaut requise").max(30),
+  defaultZone: z.string().trim().min(1, "Zone par défaut requise").max(30),
+  alertEmail: z.string().trim().email("Adresse des alertes invalide").or(z.literal("")),
   gandiOrganizationId: z.string().max(120),
-  gandiEmail: z.string().email().or(z.literal("")),
+  gandiEmail: z.string().trim().email("Email du contact Gandi invalide").or(z.literal("")),
   gandiOrgName: z.string().max(120),
   gandiGivenName: z.string().max(80),
   gandiFamilyName: z.string().max(80),
   gandiPhone: z
     .string()
-    .regex(/^(\+\d{1,3}\.?\d{6,14})?$/, "Téléphone au format international, ex. +33.612345678"),
+    .trim()
+    .transform(normalizePhone)
+    .refine(
+      (v) => v === "" || /^\+\d{1,3}\.\d{6,14}$/.test(v),
+      "Téléphone au format Gandi : indicatif, point, numéro (ex. +33.612345678)",
+    ),
   gandiStreet: z.string().max(200),
   gandiZip: z.string().max(20),
   gandiCity: z.string().max(80),
   gandiCountry: z.string().regex(/^[A-Za-z]{2}$/, "Pays sur 2 lettres (FR)"),
-  diskUsedPctMax: z.coerce.number().min(50).max(99),
-  ramUsedPctMax: z.coerce.number().min(50).max(99),
-  loadPerVcpuMax: z.coerce.number().min(0.2).max(4),
-  sitesHardCap: z.coerce.number().int().min(1).max(1000),
-  warnPct: z.coerce.number().min(30).max(99),
+  diskUsedPctMax: percent("Disque max", 50, 99),
+  ramUsedPctMax: percent("Mémoire max", 50, 99),
+  loadPerVcpuMax: z.preprocess(
+    emptyToUndefined,
+    z.coerce
+      .number({ error: "Charge CPU max : nombre requis" })
+      .min(0.2, "Charge CPU max : 0,2 minimum")
+      .max(4, "Charge CPU max : 4 maximum"),
+  ),
+  sitesHardCap: z.preprocess(
+    emptyToUndefined,
+    z.coerce
+      .number({ error: "Plafond de sites : nombre requis" })
+      .int("Plafond de sites : nombre entier")
+      .min(1, "Plafond de sites : 1 minimum")
+      .max(1000, "Plafond de sites : 1000 maximum"),
+  ),
+  warnPct: percent("Seuil d'avertissement", 30, 99),
 });
+
+/** "06 12 34 56 78", "+33 6 12…" or "+33612345678" → "+33.612345678", the format Gandi expects. */
+function normalizePhone(input: string): string {
+  const v = input.replace(/[\s()-]/g, "");
+  if (/^0\d{9}$/.test(v)) return `+33.${v.slice(1)}`;
+  if (/^\+33\d{9}$/.test(v)) return `+33.${v.slice(3)}`;
+  if (/^\+33\.0\d{9}$/.test(v)) return `+33.${v.slice(5)}`;
+  return v;
+}
+
+function emptyToUndefined(v: unknown) {
+  return typeof v === "string" && v.trim() === "" ? undefined : v;
+}
+
+function percent(label: string, min: number, max: number) {
+  return z.preprocess(
+    emptyToUndefined,
+    z.coerce
+      .number({ error: `${label} : nombre requis` })
+      .min(min, `${label} : ${min} % minimum`)
+      .max(max, `${label} : ${max} % maximum`),
+  );
+}
 
 export async function saveAgencyAction(input: Record<string, string>): Promise<Result> {
   const user = await admin();
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  if (typeof input !== "object" || input === null)
+    return { ok: false, error: "Formulaire invalide" };
   const parsed = agencySchema.safeParse(input);
   if (!parsed.success)
-    return {
-      ok: false,
-      error: parsed.error.issues.map((i) => `${i.path.join(".")} : ${i.message}`).join(", "),
-    };
+    return { ok: false, error: parsed.error.issues.map((i) => i.message).join(" · ") };
   const d = parsed.data;
   const current = await getSettings();
+  const previewChanged =
+    d.techDomain !== current.techDomain ||
+    d.previewSubdomain !== current.previewSubdomain ||
+    (d.previewDomain || "") !== (current.previewDomain || "");
+  if (previewChanged) {
+    // Existing preproduction links, DNS records and certificates follow the old names.
+    const deployed = await prisma.site.count({
+      where: { stagingReleaseId: { not: null }, isDemo: false },
+    });
+    if (deployed > 0 && input.confirmPreviewChange !== "yes")
+      return {
+        ok: false,
+        error: `${deployed} site(s) ont déjà une préproduction : changer ces domaines casse leurs liens. Cochez la confirmation pour continuer, puis redéployez leurs préproductions.`,
+      };
+  }
   await setSetting("agencyName", d.agencyName);
   await setSetting("alertEmail", d.alertEmail);
   await setSetting("techDomain", d.techDomain);
+  await setSetting("previewDomain", d.previewDomain);
   await setSetting("previewSubdomain", d.previewSubdomain);
   await setSetting("defaultOffer", d.defaultOffer);
   await setSetting("defaultZone", d.defaultZone);
@@ -337,20 +410,37 @@ export async function orderServerAction(
 ): Promise<Result> {
   const user = await admin();
   if (!user) return { ok: false, error: "Seul un administrateur peut commander un serveur" };
-  await audit(user, "server.order", {
-    target: offerId,
-    amount: monthlyPrice ?? undefined,
-    currency: "EUR",
-    details: { source: "settings" },
-  });
-  await enqueue(QUEUES.serverOrder, { offerId });
+  if (typeof offerId !== "string" || typeof monthlyPrice !== "number")
+    return { ok: false, error: "Prix de l'offre inconnu : rechargez la page." };
+  try {
+    const { requestStandaloneOrder } = await import("../jobs/maintenance");
+    const server = await requestStandaloneOrder({
+      offerId,
+      maxMonthlyPrice: monthlyPrice,
+      userId: user.id,
+    });
+    await audit(user, "server.order", {
+      target: server.name,
+      amount: server.monthlyPrice ?? undefined,
+      currency: "EUR",
+      details: { source: "settings", offer: offerId },
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Commande impossible" };
+  }
   revalidatePath("/settings/servers");
   return { ok: true };
 }
 
+let lastManualRefresh = 0;
+
 export async function refreshMetricsAction(): Promise<Result<{ count: number }>> {
   if (!(await getCurrentUser())) return { ok: false, error: "Non authentifié" };
-  const count = await collectAllMetrics();
+  // Each refresh opens an SSH connection to every server: at most once every 30 s.
+  if (Date.now() - lastManualRefresh < 30_000)
+    return { ok: false, error: "Relevé déjà demandé il y a quelques secondes." };
+  lastManualRefresh = Date.now();
+  const count = await collectAllMetrics(await isDemoMode());
   revalidatePath("/settings/servers");
   revalidatePath("/");
   return { ok: true, count };
@@ -359,8 +449,11 @@ export async function refreshMetricsAction(): Promise<Result<{ count: number }>>
 export async function deleteServerAction(serverId: string, confirmName: string): Promise<Result> {
   const user = await admin();
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  if (typeof serverId !== "string" || typeof confirmName !== "string")
+    return { ok: false, error: "Serveur introuvable" };
   const server = await prisma.server.findUnique({ where: { id: serverId } });
   if (!server) return { ok: false, error: "Serveur introuvable" };
+  if (!(await matchesCurrentMode(server))) return { ok: false, error: OTHER_MODE_ERROR };
   if (confirmName.trim() !== server.name)
     return { ok: false, error: "Le nom saisi ne correspond pas" };
   const { requestServerDeletion } = await import("../jobs/steps/delete-server");
@@ -380,11 +473,16 @@ export async function deleteServerAction(serverId: string, confirmName: string):
   return { ok: true };
 }
 
+const PASSWORD_MIN = 12;
+
 const userSchema = z.object({
-  name: z.string().min(1).max(80),
-  email: z.string().email(),
-  password: z.string().min(8).max(128),
-  role: z.enum(["admin", "manager"]),
+  name: z.string().trim().min(1, "Nom requis").max(80),
+  email: z.string().trim().toLowerCase().email("Email invalide"),
+  password: z
+    .string()
+    .min(PASSWORD_MIN, `Mot de passe : ${PASSWORD_MIN} caractères minimum`)
+    .max(128, "Mot de passe trop long"),
+  role: z.enum(["admin", "manager"], { error: "Rôle invalide" }),
 });
 
 export async function createUserAction(input: Record<string, string>): Promise<Result> {
@@ -392,10 +490,8 @@ export async function createUserAction(input: Record<string, string>): Promise<R
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
   const parsed = userSchema.safeParse(input);
   if (!parsed.success)
-    return { ok: false, error: "Vérifiez les champs (mot de passe : 8 caractères minimum)" };
-  const exists = await prisma.user.findUnique({
-    where: { email: parsed.data.email.toLowerCase() },
-  });
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Vérifiez les champs" };
+  const exists = await prisma.user.findUnique({ where: { email: parsed.data.email } });
   if (exists) return { ok: false, error: "Un compte existe déjà avec cet email" };
   await createUserWithPassword(parsed.data);
   await audit(user, "user.create", { target: parsed.data.email });
@@ -409,8 +505,12 @@ export async function setUserRoleAction(
 ): Promise<Result> {
   const user = await admin();
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  if (typeof userId !== "string" || (role !== "admin" && role !== "manager"))
+    return { ok: false, error: "Rôle invalide" };
   if (userId === user.id)
     return { ok: false, error: "Vous ne pouvez pas modifier votre propre rôle" };
+  const target = await prisma.user.findUnique({ where: { id: userId } });
+  if (!target) return { ok: false, error: "Compte introuvable" };
   await prisma.user.update({ where: { id: userId }, data: { role } });
   await audit(user, "user.setRole", { target: userId, details: { role } });
   revalidatePath("/settings/users");
@@ -420,8 +520,11 @@ export async function setUserRoleAction(
 export async function deleteUserAction(userId: string): Promise<Result> {
   const user = await admin();
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  if (typeof userId !== "string") return { ok: false, error: "Compte introuvable" };
   if (userId === user.id)
     return { ok: false, error: "Vous ne pouvez pas supprimer votre propre compte" };
+  const target = await prisma.user.findUnique({ where: { id: userId } });
+  if (!target) return { ok: false, error: "Compte introuvable" };
   await prisma.user.delete({ where: { id: userId } });
   await audit(user, "user.delete", { target: userId });
   revalidatePath("/settings/users");
@@ -467,8 +570,11 @@ export async function addExistingServerAction(
 export async function retestServerAction(serverId: string, forgetHostKey = false): Promise<Result> {
   const user = await admin();
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
-  const server = await prisma.server.findUnique({ where: { id: serverId } });
+  const server = await prisma.server.findUnique({ where: { id: String(serverId) } });
   if (!server) return { ok: false, error: "Serveur introuvable" };
+  if (!(await matchesCurrentMode(server))) return { ok: false, error: OTHER_MODE_ERROR };
+  if (server.status === "retired" || server.status === "retiring" || server.status === "ordering")
+    return { ok: false, error: "Ce serveur ne peut pas être revérifié dans son état actuel." };
   const { retestServer } = await import("../jobs/steps/register-server");
   await retestServer(serverId, forgetHostKey);
   await audit(user, "server.retest", { target: server.name, details: { forgetHostKey } });
@@ -504,6 +610,8 @@ export async function importSshKeyAction(
 ): Promise<Result<{ publicKey: string; fingerprint: string }>> {
   const user = await admin();
   if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  if (typeof privateKey !== "string" || privateKey.length > 20_000)
+    return { ok: false, error: "Clé illisible" };
   const { inspectPrivateKey } = await import("../deploy/ssh-keys");
   let info: { publicKey: string; fingerprint: string };
   try {
@@ -525,16 +633,4 @@ export async function importSshKeyAction(
   revalidatePath("/settings/integrations");
   revalidatePath("/settings/servers");
   return { ok: true, ...info };
-}
-
-/** Script to run as root on a fresh Debian 12 server before adding it to the tool. */
-export async function bootstrapScriptAction(): Promise<Result<{ script: string; ready: boolean }>> {
-  if (!(await getCurrentUser())) return { ok: false, error: "Non authentifié" };
-  const settings = await getSettings();
-  const { bootstrapScript } = await import("../deploy/bootstrap");
-  const script = bootstrapScript({
-    sshPublicKey: settings.sshPublicKey || "ssh-ed25519 CLE-PUBLIQUE-A-GENERER auscii-deploy",
-    acmeEmail: settings.gandiContact.email || `admin@${settings.techDomain}`,
-  });
-  return { ok: true, script, ready: Boolean(settings.sshPublicKey) };
 }

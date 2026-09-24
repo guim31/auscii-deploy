@@ -13,6 +13,12 @@ export type CapacityThresholds = {
 export type Settings = {
   demoMode: boolean;
   techDomain: string;
+  /**
+   * Registrable domain of the preproductions, e.g. auscii-preview.site. Empty:
+   * the tech domain is used. A separate domain is strongly recommended: the
+   * client sites' JavaScript then never runs on the same site as the tool.
+   */
+  previewDomain: string;
   previewSubdomain: string;
   defaultOffer: string;
   defaultZone: string;
@@ -40,6 +46,7 @@ export type Settings = {
 export const DEFAULT_SETTINGS: Settings = {
   demoMode: true,
   techDomain: "auscii.site",
+  previewDomain: "",
   previewSubdomain: "preview",
   defaultOffer: "DEV1-S",
   defaultZone: "fr-par-1",
@@ -100,9 +107,24 @@ export async function isDemoMode(): Promise<boolean> {
   return getSetting("demoMode");
 }
 
-export function previewHostFor(
-  slug: string,
-  settings: Pick<Settings, "techDomain" | "previewSubdomain">,
-) {
-  return `${slug}.${settings.previewSubdomain}.${settings.techDomain}`;
+type PreviewSettings = Pick<Settings, "techDomain" | "previewSubdomain"> &
+  Partial<Pick<Settings, "previewDomain">>;
+
+/** DNS zone holding the preproduction records: the preview domain, or the tech domain. */
+export function previewZone(settings: PreviewSettings): string {
+  return settings.previewDomain?.trim() || settings.techDomain;
+}
+
+export function previewHostFor(slug: string, settings: PreviewSettings) {
+  return `${slug}.${settings.previewSubdomain}.${previewZone(settings)}`;
+}
+
+/** Domains a client site may never use: they carry the tool and the preproductions. */
+export function reservedDomains(settings: PreviewSettings): string[] {
+  return [...new Set([settings.techDomain, previewZone(settings)].map((d) => d.toLowerCase()))];
+}
+
+export function isReservedDomain(fqdn: string, settings: PreviewSettings): boolean {
+  const name = fqdn.toLowerCase();
+  return reservedDomains(settings).some((d) => name === d || name.endsWith(`.${d}`));
 }

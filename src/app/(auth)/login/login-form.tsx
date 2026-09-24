@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2Icon } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import { safeNext } from "@/lib/safe-next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,10 +24,14 @@ export function LoginForm({ next }: { next: string }) {
     const res = await authClient.signIn.email({ email, password });
     setPending(false);
     if (res.error) {
-      setError("Email ou mot de passe incorrect.");
+      setError(
+        res.error.status === 429
+          ? "Trop de tentatives. Réessayez dans quelques minutes."
+          : "Email ou mot de passe incorrect.",
+      );
       return;
     }
-    router.push(next);
+    router.push(safeNext(next));
     router.refresh();
   }
 
