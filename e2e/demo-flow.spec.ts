@@ -186,15 +186,19 @@ test("SSH keys and manual server registration (demo)", async ({ page }) => {
   await page.getByLabel("Adresse IP").fill("203.0.113.10");
   await page.getByTestId("add-server-submit").click();
   await expect(page.getByText(name)).toBeVisible();
-  await expect(page.locator("div", { hasText: name }).getByText("Prêt").first()).toBeVisible({
-    timeout: 30_000,
-  });
+  // Scoped to this server's card: the other cards also say "Prêt".
+  const card = page.getByTestId(`server-card-${name}`);
+  await expect(async () => {
+    await page.reload();
+    await expect(card.getByText("Prêt")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
 
   // Deleting an empty server asks for its name, then retires it.
   await page.getByTestId(`delete-server-${name}`).click();
   await page.getByLabel("Saisissez le nom du serveur pour confirmer").fill(name);
   await page.getByTestId("confirm-delete-server").click();
-  await expect(page.locator("div", { hasText: name }).getByText("Retiré").first()).toBeVisible({
-    timeout: 30_000,
-  });
+  await expect(async () => {
+    await page.reload();
+    await expect(card.getByText("Retiré")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
 });

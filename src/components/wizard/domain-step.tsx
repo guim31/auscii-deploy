@@ -226,7 +226,7 @@ export function DomainStep({
                 onChange={(e) => setOwned(e.target.checked)}
                 className="size-4"
               />
-              Ce domaine est déjà dans le compte Gandi de l'agence (pas d'achat, DNS seulement)
+              Ce domaine existe déjà (compte Gandi de l'agence ou autre registrar) : pas d'achat
             </label>
           </div>
 

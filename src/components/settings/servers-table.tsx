@@ -149,7 +149,7 @@ export function ServersTable({
         {servers.map((s) => {
           const m = s.metrics;
           return (
-            <Card key={s.id} className="gap-3 py-4">
+            <Card key={s.id} className="gap-3 py-4" data-testid={`server-card-${s.name}`}>
               <CardContent className="flex flex-col gap-3 px-4">
                 <div className="flex items-center gap-2">
                   <ServerIcon className="text-muted-foreground size-4" />

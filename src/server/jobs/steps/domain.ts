@@ -111,8 +111,10 @@ export async function registerDomain(
 }
 
 /**
- * Checks a domain declared as "already in the Gandi account": it must be there
- * and served by LiveDNS for the tool to write its records.
+ * Checks a domain declared as already owned (nothing to buy). When it is in
+ * the Gandi account and served by LiveDNS, the tool writes its records;
+ * otherwise (another registrar, other DNS) the records are shown to be
+ * created by hand.
  */
 export async function verifyOwnedDomain(
   domain: Domain,
@@ -120,10 +122,12 @@ export async function verifyOwnedDomain(
   log: Logger,
 ): Promise<{ usesProviderDns: boolean }> {
   const info = await providers.domain.getDomain(domain.fqdn);
-  if (!info)
-    throw new Error(
-      `${domain.fqdn} n'est pas dans le compte Gandi de l'agence. Revenez à l'étape 1 pour l'acheter, ou transférez-le d'abord sur le compte.`,
+  if (!info) {
+    await log.warn(
+      `${domain.fqdn} n'est pas dans le compte Gandi de l'agence : les enregistrements DNS devront être créés chez son registrar actuel.`,
     );
+    return { usesProviderDns: false };
+  }
   await prisma.domain.update({
     where: { id: domain.id },
     data: { expiresAt: info.expiresAt ?? undefined, lastCheckedAt: new Date() },

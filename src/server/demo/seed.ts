@@ -21,10 +21,12 @@ type DemoSite = {
   server: 0 | 1;
 };
 
+// Demo slugs carry a "demo-" prefix: slugs are unique across modes, a real client
+// called "Garage Roux" must get "garage-roux", not "garage-roux-2".
 const DEMO_SITES: DemoSite[] = [
   {
     clientName: "Boulangerie Dupont",
-    slug: "boulangerie-dupont",
+    slug: "demo-boulangerie-dupont",
     domain: "boulangerie-dupont.fr",
     tagline: "Pain au levain, viennoiseries maison, depuis 1987.",
     color: "#7c2d12",
@@ -35,7 +37,7 @@ const DEMO_SITES: DemoSite[] = [
   },
   {
     clientName: "Cabinet Martin Avocats",
-    slug: "cabinet-martin",
+    slug: "demo-cabinet-martin",
     domain: "cabinet-martin-avocats.fr",
     tagline: "Droit des affaires et droit du travail à Toulouse.",
     color: "#1e3a8a",
@@ -46,7 +48,7 @@ const DEMO_SITES: DemoSite[] = [
   },
   {
     clientName: "Studio Lumen Photo",
-    slug: "studio-lumen",
+    slug: "demo-studio-lumen",
     domain: "studio-lumen.com",
     tagline: "Portraits, mariages et reportages d'entreprise.",
     color: "#4a044e",
@@ -57,7 +59,7 @@ const DEMO_SITES: DemoSite[] = [
   },
   {
     clientName: "Garage Roux",
-    slug: "garage-roux",
+    slug: "demo-garage-roux",
     domain: "garage-roux.fr",
     tagline: "Entretien et réparation toutes marques.",
     color: "#14532d",
@@ -104,7 +106,7 @@ function siteFiles(site: DemoSite): Record<string, string> {
       "Contact",
       `<h1>Contact</h1><p>Écrivez-nous, nous vous répondons rapidement.</p>
 <form action="${FORMS_ENDPOINT}" method="post" class="form">
-<input type="text" name="website" tabindex="-1" autocomplete="off" style="display:none">
+<input type="text" name="_gotcha" tabindex="-1" autocomplete="off" aria-hidden="true" style="display:none">
 <label>Nom <input name="nom" required></label>
 <label>Email <input type="email" name="email" required></label>
 <label>Message <textarea name="message" rows="5" required></textarea></label>
@@ -422,7 +424,7 @@ async function seedDemoOnce(): Promise<void> {
           },
         });
       }
-      if (demo.slug === "studio-lumen") {
+      if (demo.slug === "demo-studio-lumen") {
         // One message whose email was never sent, to show the "non transmis" state.
         await prisma.formSubmission.create({
           data: {

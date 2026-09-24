@@ -147,7 +147,7 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
           if (!(err instanceof ProviderNotConfiguredError)) throw err;
           return { skipped: "Gandi non configuré : domaine géré manuellement" };
         }
-        return { skipped: `${domain.fqdn} est déjà dans le compte Gandi` };
+        return { skipped: `${domain.fqdn} existe déjà, pas d'achat` };
       }
       if (domain.orderStatus === "registered") return { skipped: "déjà enregistré" };
       if (!ctx.deployment.domainPurchaseConfirmedById)
@@ -190,7 +190,8 @@ const provisionSteps = (payload: ProvisionPayload): StepDefinition[] => [
       if (domain.owned && !domain.orderId) {
         try {
           const info = await ctx.providers.domain.getDomain(domain.fqdn);
-          if (info && !info.usesProviderDns) return manual(`${domain.fqdn} n'utilise pas LiveDNS.`);
+          if (!info) return manual(`${domain.fqdn} n'est pas géré dans le compte Gandi.`);
+          if (!info.usesProviderDns) return manual(`${domain.fqdn} n'utilise pas LiveDNS.`);
         } catch (err) {
           if (!(err instanceof ProviderNotConfiguredError)) throw err;
         }
