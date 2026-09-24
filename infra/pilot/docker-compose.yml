@@ -1,23 +1,38 @@
 # auscii-deploy — pile du pilote. Voir infra/pilot/README.md et docs/runbook.md.
 # Toutes les variables viennent de .env, à côté de ce fichier.
+#
+# Démarrage normal : docker compose up -d (db, migrate, app, worker, caddy, backup).
+# Le compte administrateur n'est jamais créé ici : install.sh le crée une fois,
+# par une commande ponctuelle (voir prisma/seed.ts).
+
+name: auscii-deploy
+
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
 
 x-app-env: &app-env
   DATABASE_URL: postgresql://auscii:${POSTGRES_PASSWORD:?}@db:5432/auscii
   APP_URL: https://${PILOT_HOST:?}
+  PREVIEW_ORIGIN: https://${PREVIEW_APP_HOST:?}
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
   APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?}
   DATA_DIR: /data
   NODE_ENV: production
   DEMO_MODE: ${DEMO_MODE:-false}
+  TZ: Europe/Paris
 
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: auscii
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: auscii
+      TZ: Europe/Paris
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
@@ -25,24 +40,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    logging: *logging
     security_opt: ["no-new-privileges:true"]
 
-  # Applique les migrations puis crée le compte admin s'il n'existe pas, et s'arrête.
+  # Applique les migrations Prisma et s'arrête. En cas d'échec : docker compose logs migrate
   migrate:
-    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-worker:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-worker:${IMAGE_TAG:?}
     restart: "no"
     depends_on:
       db: { condition: service_healthy }
-    environment:
-      <<: *app-env
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-    command: ["sh", "-c", "pnpm exec prisma migrate deploy && pnpm exec tsx prisma/seed.ts"]
+    environment: *app-env
+    command: ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
+    logging: *logging
     security_opt: ["no-new-privileges:true"]
 
   app:
-    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-app:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-app:${IMAGE_TAG:?}
     restart: unless-stopped
+    init: true
     depends_on:
       db: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
@@ -60,76 +75,90 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 30s
+      start_interval: 2s
+    logging: *logging
     security_opt: ["no-new-privileges:true"]
 
   worker:
-    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-worker:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-worker:${IMAGE_TAG:?}
     restart: unless-stopped
+    # tini transmet SIGTERM et récupère les processus Chromium orphelins ; le
+    # worker a 20 s pour terminer proprement ses jobs (src/worker/index.ts).
+    init: true
+    stop_grace_period: 30s
     depends_on:
       db: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
     environment: *app-env
     volumes:
       - app-data:/data
+    logging: *logging
     security_opt: ["no-new-privileges:true"]
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.4-alpine
     restart: unless-stopped
     depends_on: [app]
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
     environment:
       PILOT_HOST: ${PILOT_HOST:?}
+      PREVIEW_APP_HOST: ${PREVIEW_APP_HOST:?}
       ACME_EMAIL: ${ACME_EMAIL:?}
     volumes:
       - ./Caddyfile.pilot:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    logging: *logging
     security_opt: ["no-new-privileges:true"]
 
-  # Sauvegarde nocturne : dump Postgres + archive des releases, rotation locale,
-  # envoi vers Object Storage quand les identifiants S3 sont renseignés.
+  # Sauvegarde nocturne (image auscii-deploy-backup, script infra/pilot/backup.sh) :
+  # dump Postgres + archive des fichiers, rotation locale, envoi chiffré vers
+  # Object Storage quand S3_BUCKET est renseigné. À la demande :
+  #   docker compose run --rm backup run
   backup:
-    image: postgres:16-alpine
+    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-backup:${IMAGE_TAG:?}
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
-    environment:
+    environment: &backup-env
       PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      TZ: Europe/Paris
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      BACKUP_PING_URL: ${BACKUP_PING_URL:-}
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:-}
       S3_BUCKET: ${S3_BUCKET:-}
-      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-https://s3.fr-par.scw.cloud}
       S3_REGION: ${S3_REGION:-fr-par}
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-}
       AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-}
-      BACKUP_HOUR: ${BACKUP_HOUR:-3}
     volumes:
       - app-data:/data:ro
       - backups:/backups
-      - ./backup.sh:/usr/local/bin/backup.sh:ro
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        echo "0 $${BACKUP_HOUR} * * * /usr/local/bin/backup.sh >> /backups/backup.log 2>&1" > /etc/crontabs/root
-        echo "[backup] planifié à $${BACKUP_HOUR}h"
-        exec crond -f -l 8
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/backup.sh", "check"]
+      interval: 30m
+      timeout: 10s
+      start_period: 1m
+    logging: *logging
     security_opt: ["no-new-privileges:true"]
 
   # Restauration : monte les fichiers des sites en écriture. Hors du démarrage
   # normal grâce au profil, lancé par restore.sh.
   restore:
     profiles: ["tools"]
-    image: postgres:16-alpine
+    image: ghcr.io/${GHCR_OWNER:?}/auscii-deploy-backup:${IMAGE_TAG:?}
     depends_on:
       db: { condition: service_healthy }
-    environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+    environment: *backup-env
     volumes:
       - app-data:/data
       - backups:/backups
     entrypoint: ["sh"]
+    logging: *logging
     security_opt: ["no-new-privileges:true"]
 
 volumes:
