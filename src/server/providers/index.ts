@@ -84,7 +84,18 @@ export async function getProviders(opts?: { demo?: boolean }): Promise<Providers
       defaultFrom: defaultSender(settings.agencyName, settings.techDomain),
     }),
     ai: new AnthropicProvider(anthropic),
-    agent: new SshServerAgent(ssh),
+    agent: new SshServerAgent(ssh, {
+      // First contact with a server: its host key is trusted from now on (TOFU), keep a trace.
+      onHostKeyTrusted: async (server, fingerprint) => {
+        await prisma.auditLog.create({
+          data: {
+            action: "ssh.hostKeyTrusted",
+            target: server.name,
+            details: { serverId: server.id, ip: server.ip, fingerprint },
+          },
+        });
+      },
+    }),
     screenshot: new PlaywrightScreenshotProvider(),
   };
 }

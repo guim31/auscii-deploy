@@ -25,6 +25,7 @@ function contactFrom(settings: Settings) {
     zip: c.zip || undefined,
     city: c.city || undefined,
     country: c.country || undefined,
+    siren: c.siren || undefined,
   };
 }
 

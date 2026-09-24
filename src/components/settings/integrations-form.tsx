@@ -67,7 +67,7 @@ const FIELDS: Record<
   github: {
     title: "GitHub",
     description:
-      "GitHub App installée sur l'organisation, un dépôt privé par site. Permissions : Contents (lecture/écriture), Administration (lecture/écriture), Metadata (lecture). L'Installation ID est dans l'URL de la page d'installation.",
+      "GitHub App installée sur l'organisation GitHub de l'agence (pas sur un compte personnel), un dépôt privé par site. Permissions : Contents (lecture/écriture), Administration (lecture/écriture), Metadata (lecture). L'Installation ID est dans l'URL de la page d'installation.",
     fields: [
       { key: "org", label: "Organisation", placeholder: "auscii" },
       { key: "appId", label: "App ID" },

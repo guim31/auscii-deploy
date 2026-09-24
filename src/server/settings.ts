@@ -39,6 +39,8 @@ export type Settings = {
     zip: string;
     city: string;
     country: string;
+    /** SIREN of the agency, required by AFNIC for a company owning .fr domains. */
+    siren: string;
   };
   capacity: CapacityThresholds;
 };
@@ -64,6 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
     zip: "",
     city: "",
     country: "FR",
+    siren: "",
   },
   capacity: {
     diskUsedPctMax: 80,

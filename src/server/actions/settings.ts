@@ -14,6 +14,7 @@ import { resetDemo, seedDemo } from "../demo/seed";
 import { collectAllMetrics } from "../jobs/maintenance";
 import { createUserWithPassword } from "../users";
 import { PASSWORD_MIN_LENGTH } from "../auth";
+import { normalizeGandiPhone } from "../providers/domain/gandi";
 import { mergeIntegrationFields } from "../integrations";
 import { matchesCurrentMode, OTHER_MODE_ERROR } from "../mode";
 import { isValidFqdn } from "@/lib/slug";
@@ -127,7 +128,13 @@ export async function testIntegrationAction(
       const { ScalewayProvider } = await import("../providers/cloud/scaleway");
       const creds = await loadCredentials("scaleway");
       const me = await new ScalewayProvider(creds).whoAmI(settings.defaultZone);
-      message = `Clé valide : ${me.offers} offre(s) disponibles en ${settings.defaultZone}. ${me.project ? `Projet : ${me.project}.` : (me.warning ?? "")}`;
+      message = [
+        `Clé valide : ${me.offers} offre(s) disponibles en ${settings.defaultZone}.`,
+        me.project ? `Projet : ${me.project}.` : "",
+        me.warning ?? "",
+      ]
+        .filter(Boolean)
+        .join(" ");
     } else if (provider === "resend") {
       const { loadCredentials } = await import("../providers");
       const { ResendProvider } = await import("../providers/mail/resend");
@@ -246,7 +253,6 @@ export async function sendTestEmailAction(): Promise<Result<{ message: string }>
     const providers = await getProviders();
     await providers.mail.send({
       to: user.email,
-      from: providers.demo ? undefined : await senderFor(settings),
       subject: `[${settings.agencyName}] Email de test auscii-deploy`,
       text: `Cet email confirme que l'envoi depuis auscii-deploy fonctionne (expéditeur par défaut : ${defaultSender(settings.agencyName, settings.techDomain)}).`,
     });
@@ -259,13 +265,6 @@ export async function sendTestEmailAction(): Promise<Result<{ message: string }>
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Envoi impossible" };
   }
-}
-
-async function senderFor(settings: Settings): Promise<string> {
-  const { loadCredentials } = await import("../providers");
-  const { defaultSender } = await import("../providers/mail/resend");
-  const creds = await loadCredentials("resend");
-  return creds?.from?.trim() || defaultSender(settings.agencyName, settings.techDomain);
 }
 
 const domainField = (label: string) =>
@@ -295,15 +294,19 @@ const agencySchema = z.object({
   gandiPhone: z
     .string()
     .trim()
-    .transform(normalizePhone)
+    .transform((v) => (v === "" ? "" : (normalizeGandiPhone(v) ?? `invalide:${v}`)))
     .refine(
-      (v) => v === "" || /^\+\d{1,3}\.\d{6,14}$/.test(v),
-      "Téléphone au format Gandi : indicatif, point, numéro (ex. +33.612345678)",
+      (v) => !v.startsWith("invalide:"),
+      "Téléphone illisible : indiquez-le au format international, ex. +33.612345678",
     ),
   gandiStreet: z.string().max(200),
   gandiZip: z.string().max(20),
   gandiCity: z.string().max(80),
   gandiCountry: z.string().regex(/^[A-Za-z]{2}$/, "Pays sur 2 lettres (FR)"),
+  gandiSiren: z
+    .string()
+    .transform((v) => v.replace(/\s/g, ""))
+    .refine((v) => v === "" || /^\d{9}$/.test(v), "SIREN : 9 chiffres"),
   diskUsedPctMax: percent("Disque max", 50, 99),
   ramUsedPctMax: percent("Mémoire max", 50, 99),
   loadPerVcpuMax: z.preprocess(
@@ -323,15 +326,6 @@ const agencySchema = z.object({
   ),
   warnPct: percent("Seuil d'avertissement", 30, 99),
 });
-
-/** "06 12 34 56 78", "+33 6 12…" or "+33612345678" → "+33.612345678", the format Gandi expects. */
-function normalizePhone(input: string): string {
-  const v = input.replace(/[\s()-]/g, "");
-  if (/^0\d{9}$/.test(v)) return `+33.${v.slice(1)}`;
-  if (/^\+33\d{9}$/.test(v)) return `+33.${v.slice(3)}`;
-  if (/^\+33\.0\d{9}$/.test(v)) return `+33.${v.slice(5)}`;
-  return v;
-}
 
 function emptyToUndefined(v: unknown) {
   return typeof v === "string" && v.trim() === "" ? undefined : v;
@@ -390,6 +384,7 @@ export async function saveAgencyAction(input: Record<string, string>): Promise<R
     zip: d.gandiZip,
     city: d.gandiCity,
     country: d.gandiCountry.toUpperCase(),
+    siren: d.gandiSiren,
   });
   const capacity: Settings["capacity"] = {
     ...current.capacity,

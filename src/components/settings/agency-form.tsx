@@ -48,6 +48,7 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
     gandiZip: settings.gandiContact.zip,
     gandiCity: settings.gandiContact.city,
     gandiCountry: settings.gandiContact.country,
+    gandiSiren: settings.gandiContact.siren ?? "",
     diskUsedPctMax: String(settings.capacity.diskUsedPctMax),
     ramUsedPctMax: String(settings.capacity.ramUsedPctMax),
     loadPerVcpuMax: String(settings.capacity.loadPerVcpuMax),
@@ -239,6 +240,13 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
             value={values.gandiCountry}
             onChange={set("gandiCountry")}
             maxLength={2}
+          />
+          <Field
+            id="gandiSiren"
+            label="SIREN de l'agence"
+            value={values.gandiSiren}
+            onChange={set("gandiSiren")}
+            hint="Exigé par l'AFNIC pour qu'une société soit titulaire d'un domaine en .fr."
           />
         </CardContent>
       </Card>

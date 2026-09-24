@@ -1,6 +1,5 @@
 import { prisma } from "../db";
 import { getProviders } from "../providers";
-import { GandiProvider } from "../providers/domain/gandi";
 import { daysUntil, DOMAIN_EXPIRY_ALERT_DAYS, raiseAlert } from "./alerts";
 
 /**
@@ -26,29 +25,19 @@ export async function refreshAllDomains(): Promise<number> {
   for (const d of domains) {
     try {
       const providers = await getProviders({ demo: d.site.isDemo });
-      if (providers.domain instanceof GandiProvider) {
-        const info = await providers.domain.domainInfo(d.fqdn);
-        if (info) {
-          await prisma.domain.update({
-            where: { id: d.id },
-            data: {
-              expiresAt: info.expiresAt,
-              autorenew: info.autorenew,
-              lastCheckedAt: new Date(),
-            },
-          });
-          n++;
-          await alertIfExpiring(d.fqdn, info.expiresAt, info.autorenew, d.site.isDemo);
-        }
-      } else {
-        // Demo: nothing to fetch, just record the check.
-        await prisma.domain.update({
-          where: { id: d.id },
-          data: { autorenew: true, lastCheckedAt: new Date() },
-        });
-        n++;
-        await alertIfExpiring(d.fqdn, d.expiresAt, true, d.site.isDemo);
+      const info = await providers.domain.getDomain(d.fqdn);
+      if (!info) {
+        console.warn(`[domain.refresh] ${d.fqdn} n'est plus dans le compte`);
+        continue;
       }
+      const expiresAt = info.expiresAt ?? d.expiresAt;
+      const autorenew = info.autorenew ?? d.autorenew;
+      await prisma.domain.update({
+        where: { id: d.id },
+        data: { expiresAt, autorenew, lastCheckedAt: new Date() },
+      });
+      n++;
+      await alertIfExpiring(d.fqdn, expiresAt, autorenew, d.site.isDemo);
     } catch (err) {
       console.error(`[domain.refresh] ${d.fqdn}:`, err instanceof Error ? err.message : err);
     }
