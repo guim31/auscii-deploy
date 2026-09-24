@@ -1,12 +1,22 @@
+import { createHash } from "node:crypto";
 import {
   type DnsRecord,
   type MailMessage,
   type MailProvider,
   ProviderNotConfiguredError,
 } from "../types";
+import { cleanSecret } from "../http-utils";
 import { ResendClient, type FetchLike } from "./resend-client";
 
 export type ResendCredentials = { apiKey: string; from?: string };
+
+export type ResendProviderOptions = {
+  /**
+   * Sender used when neither the message nor the settings give one:
+   * `defaultSender(agencyName, techDomain)`, set by getProviders().
+   */
+  defaultFrom?: string;
+};
 
 export type SendingDomainStatus =
   "not_started" | "pending" | "verified" | "failed" | "temporary_failure";
@@ -14,9 +24,22 @@ export type SendingDomainStatus =
 export type SendingDomain = {
   id: string;
   name: string;
+  /** Readiness for sending (partial states are resolved from the SPF/DKIM records). */
   status: SendingDomainStatus;
+  /** Status as returned by Resend, e.g. `partially_verified`. */
+  rawStatus?: string;
   /** DNS records Resend asks for, relative to the domain (`@` for the apex). */
   records: DnsRecord[];
+};
+
+type ApiRecord = {
+  record?: string;
+  name?: string;
+  type?: string;
+  ttl?: string | number;
+  value?: string;
+  priority?: number;
+  status?: string;
 };
 
 type ApiDomain = {
@@ -24,31 +47,37 @@ type ApiDomain = {
   name: string;
   status?: string;
   region?: string;
-  records?: {
-    record?: string;
-    name?: string;
-    type?: string;
-    ttl?: string | number;
-    value?: string;
-    priority?: number;
-    status?: string;
-  }[];
+  records?: ApiRecord[];
 };
 
 const REGION = "eu-west-1";
+/** Resend refuses longer idempotency keys. */
+const MAX_IDEMPOTENCY_KEY = 256;
 
 /** Sender used when the settings leave the "from" field empty. */
 export function defaultSender(agencyName: string, techDomain: string): string {
   return `${agencyName} <no-reply@${techDomain}>`;
 }
 
-function statusOf(raw: string | undefined): SendingDomainStatus {
+/**
+ * Maps Resend's domain status (resend-node DomainStatus) to readiness for
+ * sending. `partially_verified` / `partially_failed` mean that some records
+ * are verified: sending works as soon as the SPF and DKIM records are, the
+ * others (inbound MX, tracking) do not matter here.
+ */
+export function statusOf(raw: string | undefined, records?: ApiRecord[]): SendingDomainStatus {
   switch (raw) {
     case "verified":
     case "pending":
     case "failed":
     case "temporary_failure":
       return raw;
+    case "partially_verified":
+    case "partially_failed": {
+      const sending = (records ?? []).filter((r) => r.record === "SPF" || r.record === "DKIM");
+      if (sending.length > 0 && sending.every((r) => r.status === "verified")) return "verified";
+      return raw === "partially_failed" ? "failed" : "pending";
+    }
     default:
       return "not_started";
   }
@@ -89,31 +118,50 @@ function toSendingDomain(domain: ApiDomain): SendingDomain {
   return {
     id: domain.id,
     name: domain.name,
-    status: statusOf(domain.status),
+    status: statusOf(domain.status, domain.records),
+    ...(domain.status ? { rawStatus: domain.status } : {}),
     records: recordsFromResend(domain),
   };
+}
+
+/** Resend accepts keys up to 256 characters: longer ones are hashed (same key, same hash). */
+export function idempotencyHeader(key: string): string {
+  return key.length <= MAX_IDEMPOTENCY_KEY
+    ? key
+    : `sha256:${createHash("sha256").update(key).digest("hex")}`;
 }
 
 /** Real Resend implementation: transactional emails plus sending-domain management. */
 export class ResendProvider implements MailProvider {
   readonly name = "resend";
+  private readonly apiKey: string;
+  private readonly from: string;
 
   constructor(
-    private readonly creds: ResendCredentials | null,
+    creds: ResendCredentials | null,
     private readonly fetchImpl?: FetchLike,
-  ) {}
+    private readonly options: ResendProviderOptions = {},
+  ) {
+    this.apiKey = cleanSecret(creds?.apiKey);
+    this.from = (creds?.from ?? "").trim();
+  }
 
   private api(): ResendClient {
-    if (!this.creds?.apiKey)
+    if (!this.apiKey)
       throw new ProviderNotConfiguredError(
         "Resend",
         "Clé API Resend manquante (Paramètres > Intégrations).",
       );
-    return new ResendClient(this.creds.apiKey, this.fetchImpl);
+    return new ResendClient(this.apiKey, this.fetchImpl);
+  }
+
+  /** Sender actually used: the message's, else the configured one, else the agency default. */
+  senderFor(message: Pick<MailMessage, "from">): string | undefined {
+    return message.from?.trim() || this.from || this.options.defaultFrom?.trim() || undefined;
   }
 
   async send(message: MailMessage): Promise<{ id: string }> {
-    const from = message.from ?? this.creds?.from;
+    const from = this.senderFor(message);
     if (!from)
       throw new ProviderNotConfiguredError(
         "Resend",
@@ -128,6 +176,9 @@ export class ResendProvider implements MailProvider {
         ...(message.html ? { html: message.html } : {}),
         ...(message.replyTo ? { reply_to: message.replyTo } : {}),
       },
+      headers: message.idempotencyKey
+        ? { "Idempotency-Key": idempotencyHeader(message.idempotencyKey) }
+        : undefined,
     });
     return { id: res.data.id };
   }

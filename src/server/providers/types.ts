@@ -19,8 +19,12 @@ export class ProviderNotConfiguredError extends Error {
 export type DomainAvailability = {
   fqdn: string;
   available: boolean;
-  /** Registration price for the first year, when available. */
+  /** Registration price for the first year (taxes included), when available. May be a promotion. */
   price?: number;
+  /** Same price before taxes, as the registrar bills it. */
+  priceBeforeTaxes?: number;
+  /** Yearly renewal price (taxes included), when the registrar returns it; differs from `price` during promotions. */
+  renewPrice?: number;
   currency?: string;
   premium?: boolean;
   reason?: string;
@@ -55,6 +59,8 @@ export type DomainContact = {
   city?: string;
   /** ISO 3166-1 alpha-2, e.g. FR */
   country?: string;
+  /** French company number (SIREN, 9 digits): identifies a company owner of a .fr domain at AFNIC. */
+  siren?: string;
 };
 
 /** A domain already present in the registrar account. */
@@ -65,6 +71,10 @@ export type OwnedDomain = {
   expiresAt?: Date;
   /** true when the domain is served by the registrar's DNS (LiveDNS), so records can be written. */
   usesProviderDns: boolean;
+  /** Automatic renewal state, when known. */
+  autorenew?: boolean;
+  /** Raw registry statuses (EPP), for messages. */
+  registryStatus?: string[];
 };
 
 export interface DomainProvider {
@@ -96,9 +106,17 @@ export type ServerOffer = {
   id: string;
   vcpus: number;
   ramGb: number;
+  /** Root volume size the tool creates for this offer. */
   diskGb: number;
+  /** Estimated monthly total before taxes: instance, plus public IPv4 and root volume when billed apart (see priceBreakdown). */
   monthlyPrice: number;
   currency: string;
+  /** Parts of monthlyPrice; a missing part is not included in the total. */
+  priceBreakdown?: { instance: number; ipv4?: number; volume?: number };
+  /** CPU architecture, e.g. x86_64 or arm64. */
+  arch?: string;
+  /** Root volume kind: local SSD, or block storage billed separately. */
+  storage?: "l_ssd" | "sbs_volume";
 };
 
 export type CloudServer = {
@@ -111,6 +129,21 @@ export type CloudServer = {
   metadata?: Record<string, unknown>;
 };
 
+/**
+ * Thrown by createServer when the instance exists at the provider (onCreated
+ * already ran with `server`) but a later step failed: cloud-init, power-on, or
+ * onCreated itself. The instance is billed: keep `server.providerId`.
+ */
+export class ServerOrderIncompleteError extends Error {
+  constructor(
+    message: string,
+    public readonly server: CloudServer,
+  ) {
+    super(message);
+    this.name = "ServerOrderIncompleteError";
+  }
+}
+
 export interface CloudProvider {
   readonly name: string;
   listOffers(zone: string): Promise<ServerOffer[]>;
@@ -119,6 +152,10 @@ export interface CloudProvider {
    * offer is unavailable). `onCreated` runs as soon as the instance exists at
    * the provider, before cloud-init and power-on, so the caller can persist its
    * id: a later failure then never leaves a billed instance unknown to the tool.
+   * A failure after the instance exists throws ServerOrderIncompleteError.
+   * Idempotent by name: when an instance created by the tool already has this
+   * name in the zone (an interrupted order), it is adopted and finished instead
+   * of ordering a second one. Names must therefore never be reused.
    */
   createServer(
     input: {

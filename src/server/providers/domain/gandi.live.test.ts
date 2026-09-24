@@ -19,7 +19,14 @@ describe.skipIf(!token)("Gandi live (read-only)", () => {
     expect(free.price).toBeGreaterThan(0);
   });
 
-  it("lists owned domains", async () => {
-    expect(Array.isArray(await p.listOwned())).toBe(true);
+  it("lists owned domains and reads one", async () => {
+    const owned = await p.listOwned();
+    expect(Array.isArray(owned)).toBe(true);
+    if (owned[0]) {
+      const d = await p.getDomain(owned[0]);
+      expect(d?.fqdn).toBe(owned[0]);
+      expect(["active", "pending", "other"]).toContain(d?.status);
+    }
+    expect(await p.getDomain(`auscii-test-${Date.now().toString(36)}.fr`)).toBeNull();
   });
 });

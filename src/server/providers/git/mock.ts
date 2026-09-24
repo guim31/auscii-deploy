@@ -2,6 +2,7 @@ import type { GitBranch, GitProvider } from "../types";
 import { fakeSha, sleep } from "../mock-utils";
 
 const repos = new Map<string, { branches: Record<GitBranch, string | null>; tags: string[] }>();
+const tagShas = new Map<string, string>();
 
 export class MockGitProvider implements GitProvider {
   readonly name = "mock-github";
@@ -36,8 +37,16 @@ export class MockGitProvider implements GitProvider {
     const target = input.commitSha ?? repo.branches.staging;
     if (!target) throw new Error("Aucune version en préproduction à publier");
     repo.branches.production = target;
-    repo.tags.push(input.tag);
-    return { commitSha: target, tag: input.tag };
+    // Like the real provider: same tag on the same commit is a no-op, a tag
+    // taken by another commit gets the next free suffix.
+    let tag = input.tag;
+    for (let i = 2; tagShas.has(`${input.repo}@${tag}`); i++) {
+      if (tagShas.get(`${input.repo}@${tag}`) === target) return { commitSha: target, tag };
+      tag = `${input.tag}-${i}`;
+    }
+    tagShas.set(`${input.repo}@${tag}`, target);
+    repo.tags.push(tag);
+    return { commitSha: target, tag };
   }
 
   /** Test helper. */
