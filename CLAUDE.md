@@ -31,8 +31,10 @@ Outil web interne d'AUSCII pour publier des sites vitrine statiques sur des VPS 
 
 ## Commandes
 
-- `pnpm dev` : app + worker en local, Postgres via `docker compose up -d db`. `pnpm db:migrate`, `pnpm db:seed`.
-- `pnpm test` : Vitest (unitaires + pipelines contre la base `DATABASE_URL_TEST`). `pnpm e2e` : Playwright en mode démo (démarre app et worker).
+- `pnpm dev` : app + worker en local, Postgres via `docker compose up -d db`. `pnpm db:migrate`, `pnpm db:seed` (lit `.env`, admin avec un mot de passe de 12 caractères minimum).
+- `pnpm test` : Vitest (unitaires + pipelines). Les tests base de données exigent `DATABASE_URL_TEST`, une base distincte de `DATABASE_URL` : ils suppriment les données de démo.
+- `pnpm e2e` : Playwright en mode démo sur `next dev` (démarre app et worker) ; `pnpm e2e:build` (et la CI) sur le build de production.
+- Pilote : trois images (`app`, `worker`, `backup`) étiquetées au SHA court du commit ; `infra/pilot/smoke-test.sh` démarre la pile et la vérifie, la CI le lance avant toute publication.
 - `pnpm lint`, `pnpm typecheck`, `pnpm build` : à passer avant tout commit.
 
 ## Repères dans le code

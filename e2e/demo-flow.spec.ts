@@ -6,7 +6,7 @@ import path from "node:path";
 import yazl from "yazl";
 
 const EMAIL = process.env.ADMIN_EMAIL ?? "admin@auscii.com";
-const PASSWORD = process.env.ADMIN_PASSWORD ?? "admin1234";
+const PASSWORD = process.env.ADMIN_PASSWORD ?? "admin-local-password";
 
 async function login(page: Page) {
   await page.goto("/login");
