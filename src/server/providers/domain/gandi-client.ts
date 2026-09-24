@@ -3,9 +3,22 @@
  * or error messages; errors are translated for the deployment console.
  */
 
+import {
+  cleanSecret,
+  fetchWithRetry,
+  hasForbiddenHeaderChars,
+  invalidSecretMessage,
+  NetworkError,
+  networkErrorReason,
+  readBody,
+  sanitizeMessage,
+  type FetchLike,
+  type RetryOptions,
+} from "../http-utils";
+
 export const GANDI_API = "https://api.gandi.net/v5";
 
-export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type { FetchLike };
 
 export class GandiError extends Error {
   constructor(
@@ -18,7 +31,9 @@ export class GandiError extends Error {
   }
 }
 
-type GandiErrorBody = {
+export type GandiErrorBody = {
+  /** "success" or "error": a dry run answers 200 in both cases. */
+  status?: string;
   code?: number;
   message?: string;
   object?: string;
@@ -56,14 +71,19 @@ export function describeGandiError(
 }
 
 export class GandiClient {
+  private readonly token: string;
+
   constructor(
-    private readonly token: string,
+    token: string,
     private readonly organizationId: string | undefined,
     private readonly fetchImpl: FetchLike = (input, init) => fetch(input, init),
     private readonly timeoutMs = 20_000,
-  ) {}
+    private readonly retry: RetryOptions = {},
+  ) {
+    this.token = cleanSecret(token);
+  }
 
-  /** Performs a request and parses JSON. `expect` lists the accepted status codes. */
+  /** Performs a request and parses JSON. `expect` lists the accepted status codes. GETs are retried on 429/5xx. */
   async request<T>(
     method: string,
     path: string,
@@ -74,49 +94,39 @@ export class GandiClient {
       expect?: number[];
     } = {},
   ): Promise<{ status: number; data: T; headers: Headers }> {
+    if (hasForbiddenHeaderChars(this.token))
+      throw new GandiError(invalidSecretMessage("La clé API Gandi"), 0);
     const url = new URL(GANDI_API + path);
     if (opts.sharing && this.organizationId)
       url.searchParams.set("sharing_id", this.organizationId);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let res: Response;
     try {
-      res = await this.fetchImpl(url.toString(), {
-        method,
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          Accept: "application/json",
-          ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
-          ...opts.headers,
+      res = await fetchWithRetry(
+        this.fetchImpl,
+        url.toString(),
+        {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: "application/json",
+            ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
+            ...opts.headers,
+          },
+          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         },
-        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-        signal: controller.signal,
-      });
+        { timeoutMs: this.timeoutMs, secrets: [this.token], ...this.retry },
+      );
     } catch (err) {
       const reason =
-        err instanceof Error && err.name === "AbortError"
-          ? "délai dépassé"
-          : err instanceof Error
-            ? err.message
-            : String(err);
+        err instanceof NetworkError ? err.reason : networkErrorReason(err, [this.token]);
       throw new GandiError(`Gandi injoignable (${reason}).`, 0);
-    } finally {
-      clearTimeout(timer);
     }
-    const text = await res.text();
-    let data: unknown = null;
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
-    }
+    const data = await readBody(res);
     const accepted = opts.expect ?? [200, 201, 202, 204];
     if (!accepted.includes(res.status)) {
-      const body = typeof data === "object" ? (data as GandiErrorBody) : null;
+      const body = data && typeof data === "object" ? (data as GandiErrorBody) : null;
       throw new GandiError(
-        describeGandiError(res.status, body, `${method} ${path}`),
+        sanitizeMessage(describeGandiError(res.status, body, `${method} ${path}`), [this.token]),
         res.status,
         data,
       );

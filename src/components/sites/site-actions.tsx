@@ -63,7 +63,7 @@ export function RollbackButton({
             <Button variant="outline" onClick={() => setOpen(false)}>
               Annuler
             </Button>
-            <Button onClick={go} data-testid="confirm-rollback">
+            <Button onClick={go} disabled={pending} data-testid="confirm-rollback">
               Confirmer
             </Button>
           </DialogFooter>

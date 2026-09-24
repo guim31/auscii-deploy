@@ -35,6 +35,7 @@ export function LaunchStep({
   domain,
   previewUrl,
   previewSecretUrl,
+  localPreviewUrl,
   demo,
   stagingDone,
   liveDone,
@@ -47,6 +48,8 @@ export function LaunchStep({
   domain: string;
   previewUrl: string;
   previewSecretUrl: string;
+  /** Signed URL of the release preview served by the pilot (demo sites have no real server). */
+  localPreviewUrl: string;
   demo: boolean;
   stagingDone: boolean;
   liveDone: boolean;
@@ -60,11 +63,17 @@ export function LaunchStep({
   const [liveOk, setLiveOk] = useState(liveDone);
   const [confirm, setConfirm] = useState(false);
   const [pending, startTransition] = useTransition();
+  const active = (d: DeploymentView | null) =>
+    d?.state.status === "queued" || d?.state.status === "running";
+  // A started deployment keeps its buttons disabled until its console reports the end.
+  const [stagingBusy, setStagingBusy] = useState(active(staging));
+  const [promoteBusy, setPromoteBusy] = useState(active(promote));
 
   function deployStaging() {
     startTransition(async () => {
       const res = await startStagingAction(siteId, releaseId);
       if (!res.ok) return void toast.error(res.error);
+      setStagingBusy(true);
       setStagingOk(false);
       setStagingDeployment({
         id: res.deploymentId,
@@ -79,6 +88,7 @@ export function LaunchStep({
     startTransition(async () => {
       const res = await startPromoteAction(siteId, releaseId);
       if (!res.ok) return void toast.error(res.error);
+      setPromoteBusy(true);
       setPromoteDeployment({
         id: res.deploymentId,
         state: { status: "queued", steps: [], error: null },
@@ -113,6 +123,7 @@ export function LaunchStep({
               initialLogs={stagingDeployment.logs}
               compact
               onFinished={(s) => {
+                setStagingBusy(false);
                 if (s === "succeeded") {
                   setStagingOk(true);
                   toast.success("Préproduction en ligne");
@@ -132,7 +143,7 @@ export function LaunchStep({
               </Button>
               {demo ? (
                 <Button size="sm" variant="ghost" asChild>
-                  <a href={`/api/preview/${releaseId}/`} target="_blank" rel="noreferrer">
+                  <a href={localPreviewUrl} target="_blank" rel="noreferrer">
                     <ExternalLinkIcon /> Aperçu local (démo)
                   </a>
                 </Button>
@@ -147,7 +158,7 @@ export function LaunchStep({
                 size="sm"
                 variant="ghost"
                 onClick={deployStaging}
-                disabled={pending}
+                disabled={pending || stagingBusy || promoteBusy}
                 className="ml-auto"
               >
                 Redéployer
@@ -158,7 +169,7 @@ export function LaunchStep({
               <Button
                 size="lg"
                 onClick={deployStaging}
-                disabled={pending || stagingDeployment?.state.status === "running"}
+                disabled={pending || stagingBusy || promoteBusy}
                 data-testid="deploy-staging"
               >
                 {pending ? <Loader2Icon className="animate-spin" /> : <LockIcon />} Déployer en
@@ -176,7 +187,7 @@ export function LaunchStep({
             {liveOk && <CheckCircle2Icon className="text-success size-4" />}
           </CardTitle>
           <CardDescription>
-            Fusion de staging vers production, publication sur {domain} et certificat HTTPS. Le site
+            Mise en ligne de la version relue sur {domain}, avec son certificat HTTPS. Le site
             apparaît ensuite sur le tableau de bord.
           </CardDescription>
         </CardHeader>
@@ -189,6 +200,7 @@ export function LaunchStep({
               initialLogs={promoteDeployment.logs}
               compact
               onFinished={(s) => {
+                setPromoteBusy(false);
                 if (s === "succeeded") {
                   setLiveOk(true);
                   toast.success(`${domain} est en ligne`);
@@ -206,7 +218,7 @@ export function LaunchStep({
               <Button
                 size="lg"
                 onClick={() => setConfirm(true)}
-                disabled={!stagingOk || pending || promoteDeployment?.state.status === "running"}
+                disabled={!stagingOk || pending || stagingBusy || promoteBusy}
                 data-testid="publish"
               >
                 <RocketIcon /> Publier en production
@@ -230,7 +242,11 @@ export function LaunchStep({
             <Button variant="outline" onClick={() => setConfirm(false)}>
               Annuler
             </Button>
-            <Button onClick={publish} data-testid="confirm-publish">
+            <Button
+              onClick={publish}
+              disabled={pending || promoteBusy}
+              data-testid="confirm-publish"
+            >
               <RocketIcon /> Publier
             </Button>
           </DialogFooter>

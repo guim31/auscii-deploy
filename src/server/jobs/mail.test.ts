@@ -45,11 +45,15 @@ describe("formMessage", () => {
 });
 
 describe("alert helpers", () => {
-  it("computes days and the deduplication day in UTC", () => {
+  it("computes days, and the deduplication day in Paris time", () => {
     const now = new Date("2026-09-02T22:30:00Z");
     expect(daysUntil(new Date("2026-09-12T10:00:00Z"), now)).toBe(9);
     expect(daysUntil(new Date("2026-09-01T00:00:00Z"), now)).toBe(-2);
-    expect(alertDay(now).toISOString()).toBe("2026-09-02T00:00:00.000Z");
+    // 22:30 UTC is already 00:30 on the 3rd in Paris (summer time).
+    expect(alertDay(now).toISOString()).toBe("2026-09-03T00:00:00.000Z");
+    expect(alertDay(new Date("2026-09-02T10:00:00Z")).toISOString()).toBe(
+      "2026-09-02T00:00:00.000Z",
+    );
   });
 });
 

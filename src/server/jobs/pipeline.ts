@@ -1,8 +1,8 @@
-import type { Deployment, Prisma, Site } from "@prisma/client";
+import type { Deployment, DeployKind, Prisma, Site, SiteStatus } from "@prisma/client";
 import { prisma } from "../db";
 import { getProviders, type Providers } from "../providers";
 import { getSettings, type Settings } from "../settings";
-import { createLogger, type Logger } from "./log";
+import { createLogger, redactSecrets, type Logger } from "./log";
 import { raiseAlert } from "./alerts";
 import { env } from "../env";
 
@@ -61,37 +61,106 @@ function stepsFromJson(json: Prisma.JsonValue, defs: StepDefinition[]): StepStat
 }
 
 /**
+ * Status of a site after a failed deployment. A site in production stays in
+ * production: a failed preproduction deploy, publication or rollback never
+ * takes it out of "live" (its server stays protected, its certificate checked,
+ * its rollback available). Only a failed provision puts a site in "error".
+ */
+export function statusAfterFailure(
+  site: Pick<Site, "status" | "liveReleaseId">,
+  kind: DeployKind,
+): SiteStatus {
+  if (site.liveReleaseId) return "live";
+  if (kind === "provision") return "error";
+  if (site.status === "draft" || site.status === "provisioning") return "error";
+  return site.status;
+}
+
+async function failDeployment(input: {
+  deployment: Deployment;
+  site: Site;
+  message: string;
+  stepLabel?: string;
+  steps?: StepState[];
+}) {
+  const { deployment, site, stepLabel, steps } = input;
+  const message = redactSecrets(input.message);
+  await prisma.deployment.update({
+    where: { id: deployment.id },
+    data: {
+      status: "failed",
+      error: message,
+      finishedAt: new Date(),
+      ...(steps ? { steps: steps as object } : {}),
+    },
+  });
+  const current = await prisma.site.findUnique({ where: { id: site.id } });
+  if (current) {
+    await prisma.site.update({
+      where: { id: site.id },
+      data: { status: statusAfterFailure(current, deployment.kind) },
+    });
+  }
+  await raiseAlert({
+    kind: "deployment_failed",
+    key: deployment.id,
+    subject: `Déploiement en erreur : ${site.clientName}`,
+    body: [
+      `Le déploiement « ${KIND_LABEL[deployment.kind] ?? deployment.kind} » du site ${site.clientName} a échoué${stepLabel ? ` à l'étape « ${stepLabel} »` : ""}.`,
+      "",
+      `Erreur : ${message}`,
+      "",
+      `Détails et relance : ${env().APP_URL}/sites/${site.id}?deployment=${deployment.id}`,
+    ].join("\n"),
+    isDemo: site.isDemo,
+  }).catch((err) => console.error("[alerts]", err instanceof Error ? err.message : err));
+}
+
+/**
  * Runs the steps of a deployment in order, persisting the state of each one.
- * Steps already "done" or "skipped" are not run again, so re-sending the same
- * job resumes after a failure.
+ * Steps already "done" or "skipped" are not run again, so re-queuing the same
+ * deployment resumes after a failure.
+ *
+ * The deployment is claimed atomically (queued → running): a duplicate job, or
+ * a job re-delivered while the first run is still going, does nothing. Any
+ * failure, inside a step or not, marks the deployment failed.
  */
 export async function runPipeline(
   deploymentId: string,
   defs: StepDefinition[],
   data: Record<string, unknown> = {},
 ): Promise<void> {
-  const deployment = await prisma.deployment.findUnique({ where: { id: deploymentId } });
-  if (!deployment) throw new Error(`Deployment ${deploymentId} introuvable`);
-  if (deployment.status === "succeeded") return;
-
+  const claimed = await prisma.deployment.updateMany({
+    where: { id: deploymentId, status: "queued" },
+    data: { status: "running", error: null },
+  });
+  if (claimed.count === 0) {
+    console.warn(`[pipeline] ${deploymentId} n'est pas en attente : exécution ignorée`);
+    return;
+  }
+  const deployment = await prisma.deployment.findUniqueOrThrow({ where: { id: deploymentId } });
   let site = await prisma.site.findUniqueOrThrow({ where: { id: deployment.siteId } });
-  const providers = await getProviders();
-  const settings = await getSettings();
   const steps = stepsFromJson(deployment.steps, defs);
-  const log = createLogger(deploymentId);
 
+  let providers: Providers;
+  let settings: Settings;
+  try {
+    // The site decides between mocks and real integrations, never the current UI mode.
+    providers = await getProviders({ demo: site.isDemo });
+    settings = await getSettings();
+    await prisma.deployment.update({
+      where: { id: deploymentId },
+      data: { startedAt: deployment.startedAt ?? new Date(), steps: steps as object },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await failDeployment({ deployment, site, message, steps });
+    throw new PipelineError(message, "init");
+  }
+
+  const log = createLogger(deploymentId);
   const persist = () =>
     prisma.deployment.update({ where: { id: deploymentId }, data: { steps: steps as object } });
-
-  await prisma.deployment.update({
-    where: { id: deploymentId },
-    data: {
-      status: "running",
-      startedAt: deployment.startedAt ?? new Date(),
-      error: null,
-      steps: steps as object,
-    },
-  });
 
   const ctx: StepContext = {
     deployment,
@@ -110,13 +179,13 @@ export async function runPipeline(
   for (const def of defs) {
     const state = steps.find((s) => s.key === def.key)!;
     if (state.status === "done" || state.status === "skipped") continue;
-    state.status = "running";
-    state.startedAt = new Date().toISOString();
-    state.detail = undefined;
-    await persist();
     const stepLog = createLogger(deploymentId, def.key);
-    ctx.log = stepLog;
     try {
+      state.status = "running";
+      state.startedAt = new Date().toISOString();
+      state.detail = undefined;
+      await persist();
+      ctx.log = stepLog;
       const result = await def.run(ctx);
       if (result && "skipped" in result) {
         state.status = "skipped";
@@ -128,29 +197,12 @@ export async function runPipeline(
       state.finishedAt = new Date().toISOString();
       await persist();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = redactSecrets(err instanceof Error ? err.message : String(err));
       state.status = "failed";
       state.detail = message;
       state.finishedAt = new Date().toISOString();
-      await stepLog.error(message);
-      await prisma.deployment.update({
-        where: { id: deploymentId },
-        data: { status: "failed", error: message, finishedAt: new Date(), steps: steps as object },
-      });
-      await prisma.site.update({ where: { id: site.id }, data: { status: "error" } });
-      await raiseAlert({
-        kind: "deployment_failed",
-        key: deploymentId,
-        subject: `Déploiement en erreur : ${site.clientName}`,
-        body: [
-          `Le déploiement « ${KIND_LABEL[deployment.kind] ?? deployment.kind} » du site ${site.clientName} a échoué à l'étape « ${def.label} ».`,
-          "",
-          `Erreur : ${message}`,
-          "",
-          `Détails et relance : ${env().APP_URL}/sites/${site.id}?deployment=${deploymentId}`,
-        ].join("\n"),
-        isDemo: site.isDemo,
-      }).catch((err) => console.error("[alerts]", err instanceof Error ? err.message : err));
+      await stepLog.error(message).catch(() => undefined);
+      await failDeployment({ deployment, site, message, stepLabel: def.label, steps });
       throw new PipelineError(message, def.key);
     }
   }
@@ -159,4 +211,27 @@ export async function runPipeline(
     where: { id: deploymentId },
     data: { status: "succeeded", finishedAt: new Date(), steps: steps as object },
   });
+}
+
+const INTERRUPTED =
+  "Interrompu : le worker a redémarré pendant l'exécution. Relancez : les étapes terminées ne seront pas refaites.";
+
+/**
+ * Marks as failed the deployments left "running" by a stopped worker (at
+ * worker start: nothing can be running yet), or running for too long.
+ */
+export async function failInterruptedDeployments(olderThanMs = 0): Promise<number> {
+  const stale = await prisma.deployment.findMany({
+    where: {
+      status: "running",
+      ...(olderThanMs > 0 ? { startedAt: { lt: new Date(Date.now() - olderThanMs) } } : {}),
+    },
+    include: { site: true },
+  });
+  for (const d of stale) {
+    const steps = (Array.isArray(d.steps) ? d.steps : []) as StepState[];
+    for (const s of steps) if (s.status === "running") s.status = "failed";
+    await failDeployment({ deployment: d, site: d.site, message: INTERRUPTED, steps });
+  }
+  return stale.length;
 }

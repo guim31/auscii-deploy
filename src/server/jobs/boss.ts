@@ -24,35 +24,72 @@ export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
 const globalForBoss = globalThis as unknown as { boss?: PgBoss; bossStarted?: Promise<PgBoss> };
 
-export function getBoss(): PgBoss {
+/** Pipelines report their own failures and resume step by step: pg-boss never replays them. */
+const PIPELINE_QUEUES: QueueName[] = [
+  QUEUES.provision,
+  QUEUES.deploy,
+  QUEUES.promote,
+  QUEUES.rollback,
+  // Ordering a server is paid: never retried automatically.
+  QUEUES.serverOrder,
+];
+
+function queueOptions(name: QueueName) {
+  const base = {
+    retryBackoff: true,
+    // Completed jobs are kept a week for troubleshooting.
+    deleteAfterSeconds: 60 * 60 * 24 * 7,
+  };
+  if (PIPELINE_QUEUES.includes(name)) {
+    return {
+      ...base,
+      retryLimit: 0,
+      // A provision may wait for a domain and a new server: well above the longest run.
+      expireInSeconds: 60 * 60 * 3,
+      // A crashed worker stops sending heartbeats: its job fails within minutes instead of
+      // hours, and the deployment is marked failed at the next worker start.
+      heartbeatSeconds: 60,
+    };
+  }
+  if (name === QUEUES.mailSend) {
+    // An email outage is absorbed over about a day (1 min, 2, 4… capped at 1 h).
+    return {
+      ...base,
+      retryLimit: 12,
+      retryDelay: 60,
+      retryDelayMax: 60 * 60,
+      expireInSeconds: 120,
+    };
+  }
+  return { ...base, retryLimit: 2, retryDelay: 30, expireInSeconds: 60 * 15 };
+}
+
+/**
+ * pg-boss instance of this process. Only the worker supervises queues and runs
+ * the cron schedules; the web app just sends jobs.
+ */
+export function getBoss(role: "worker" | "app" = "app"): PgBoss {
   if (!globalForBoss.boss) {
     globalForBoss.boss = new PgBoss({
       connectionString: env().DATABASE_URL,
       schema: "pgboss",
       max: 4,
+      supervise: role === "worker",
+      schedule: role === "worker",
     });
     globalForBoss.boss.on("error", (err: Error) => console.error("[pg-boss]", err));
   }
   return globalForBoss.boss;
 }
 
-/** Starts pg-boss once per process and makes sure every queue exists. */
-export function startBoss(): Promise<PgBoss> {
+/** Starts pg-boss once per process and makes sure every queue exists with its options. */
+export function startBoss(role: "worker" | "app" = "app"): Promise<PgBoss> {
   if (!globalForBoss.bossStarted) {
     globalForBoss.bossStarted = (async () => {
-      const boss = getBoss();
+      const boss = getBoss(role);
       await boss.start();
       for (const name of Object.values(QUEUES)) {
-        // Retries only cover jobs lost to a worker restart or a timeout: pipelines
-        // report their own failures without throwing, so a handled failure is not retried.
-        // Emails are cheap to retry, so a mail outage is absorbed over a few hours.
-        const options = {
-          retryLimit: name === QUEUES.mailSend ? 6 : 2,
-          retryDelay: name === QUEUES.mailSend ? 60 : 30,
-          retryBackoff: true,
-          expireInSeconds: 60 * 15,
-          retentionSeconds: 60 * 60 * 24 * 7,
-        };
+        const options = queueOptions(name);
         await boss.createQueue(name, options);
         await boss.updateQueue(name, options);
       }

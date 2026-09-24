@@ -18,18 +18,24 @@ export async function GET(request: Request, ctx: { params: Promise<{ siteId: str
     select: { screenshotPath: true },
   });
   if (!site?.screenshotPath) return new NextResponse(null, { status: 404 });
-  const file = path.resolve(screenshotsDir(), site.screenshotPath);
+  const file = path.resolve(/* turbopackIgnore: true */ screenshotsDir(), site.screenshotPath);
   if (!file.startsWith(screenshotsDir() + path.sep)) return new NextResponse(null, { status: 404 });
   try {
-    await stat(file);
+    await stat(/* turbopackIgnore: true */ file);
   } catch {
     return new NextResponse(null, { status: 404 });
   }
-  const type = file.endsWith(".svg") ? "image/svg+xml" : "image/png";
+  const svg = file.endsWith(".svg");
   return new NextResponse(
     Readable.toWeb(createReadStream(/* turbopackIgnore: true */ file)) as ReadableStream,
     {
-      headers: { "Content-Type": type, "Cache-Control": "private, max-age=300" },
+      headers: {
+        "Content-Type": svg ? "image/svg+xml" : "image/png",
+        "Cache-Control": "private, max-age=300",
+        "X-Content-Type-Options": "nosniff",
+        // An SVG opened directly is a document: no script, no external load.
+        "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+      },
     },
   );
 }

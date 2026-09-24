@@ -5,12 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       db:
-        image: postgres:16-alpine
+        image: postgres:16.15-alpine
         env:
           POSTGRES_USER: auscii
           POSTGRES_PASSWORD: auscii
@@ -19,13 +27,16 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U auscii" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      # e2e database (migrated and seeded below) and a separate one for Vitest,
+      # which deletes demo data: the two suites never share a database.
       DATABASE_URL: postgresql://auscii:auscii@localhost:5432/auscii
+      DATABASE_URL_TEST: postgresql://auscii:auscii@localhost:5432/auscii_test
       APP_URL: http://localhost:3100
       BETTER_AUTH_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
       APP_ENCRYPTION_KEY: 7f3b2c1d9e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c
       DATA_DIR: ./data
       ADMIN_EMAIL: admin@auscii.com
-      ADMIN_PASSWORD: admin1234
+      ADMIN_PASSWORD: ci-admin-password
       DEMO_MODE: "true"
     steps:
       - uses: actions/checkout@v4
@@ -38,54 +49,112 @@ jobs:
       - run: pnpm db:generate
       - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm format:check
+      - name: Test database
+        run: PGPASSWORD=auscii psql -h localhost -U auscii -d auscii -c 'CREATE DATABASE auscii_test'
       - run: pnpm test
       - run: pnpm db:deploy
       - run: pnpm db:seed
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
+      # CI=true: Playwright serves the production build (next start), see playwright.config.ts.
       - run: pnpm e2e
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
-          path: test-results
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
 
-  # Construit les deux images à chaque pull request (preuve que le Dockerfile
-  # tient), et ne publie sur GHCR que depuis main.
+  # Builds the three pilot images, starts the pilot stack from them (without
+  # Caddy, which needs public DNS) and checks that it really runs: migrations,
+  # /api/health, worker, admin seed, writable /data, backup and restore. The
+  # tested images are then pushed to GHCR from main only, tagged with the bare
+  # short SHA (7 characters) that install.sh and update.sh expect. No "latest".
   images:
     needs: checks
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        target: [app, worker]
     steps:
       - uses: actions/checkout@v4
+      - name: Image names
+        id: names
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          tag="${GITHUB_SHA::7}"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prefix=ghcr.io/$owner/auscii-deploy" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
-      - name: Connexion à GHCR
-        if: github.ref == 'refs/heads/main'
+      - name: Build app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: app
+          load: true
+          tags: ${{ steps.names.outputs.prefix }}-app:${{ steps.names.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+      - name: Build worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker
+          load: true
+          tags: ${{ steps.names.outputs.prefix }}-worker:${{ steps.names.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+      - name: Build backup
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: backup
+          load: true
+          tags: ${{ steps.names.outputs.prefix }}-backup:${{ steps.names.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=backup
+          cache-to: type=gha,mode=max,scope=backup
+
+      - name: Smoke test of the pilot stack
+        env:
+          GHCR_OWNER: ${{ steps.names.outputs.owner }}
+          IMAGE_TAG: ${{ steps.names.outputs.tag }}
+        run: bash infra/pilot/smoke-test.sh
+
+      - name: Stack logs
+        if: failure()
+        run: docker compose -f infra/pilot/docker-compose.yml logs --no-color --timestamps > compose-logs.txt || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          retention-days: 7
+
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Étiquettes
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/auscii-deploy-${{ matrix.target }}
-          tags: |
-            type=sha,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
-      - name: Construction et publication
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: ${{ matrix.target }}
-          push: ${{ github.ref == 'refs/heads/main' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.target }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+      - name: Push
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          for target in app worker backup; do
+            docker push "${{ steps.names.outputs.prefix }}-$target:${{ steps.names.outputs.tag }}"
+          done
+          echo "Published: ${{ steps.names.outputs.prefix }}-{app,worker,backup}:${{ steps.names.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"

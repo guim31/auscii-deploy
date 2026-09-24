@@ -1,12 +1,13 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
-import { admin } from "better-auth/plugins";
 import { prisma } from "./db";
 import { env } from "./env";
 
 export const ROLES = ["admin", "manager"] as const;
 export type Role = (typeof ROLES)[number];
+
+export const PASSWORD_MIN_LENGTH = 12;
 
 export const auth = betterAuth({
   baseURL: env().APP_URL,
@@ -15,10 +16,17 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     disableSignUp: true,
-    minPasswordLength: 8,
+    minPasswordLength: PASSWORD_MIN_LENGTH,
+  },
+  // The role lives on the user row; it is only ever changed by the admin actions
+  // (never through better-auth endpoints: `input: false`).
+  user: {
+    additionalFields: {
+      role: { type: "string", input: false, defaultValue: "manager", required: false },
+    },
   },
   session: {
-    expiresIn: 60 * 60 * 24 * 14,
+    expiresIn: 60 * 60 * 24 * 7,
     updateAge: 60 * 60 * 24,
   },
   trustedOrigins: [env().APP_URL],
@@ -34,7 +42,9 @@ export const auth = betterAuth({
       "/sign-up/email": { window: 3600, max: 5 },
     },
   },
-  plugins: [admin({ defaultRole: "manager", adminRoles: ["admin"] }), nextCookies()],
+  // No "admin" plugin: its endpoints (set-role, impersonate, remove-user…) would
+  // bypass the guards and the audit log of the admin actions.
+  plugins: [nextCookies()],
 });
 
 export type Auth = typeof auth;

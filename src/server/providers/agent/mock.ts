@@ -40,7 +40,22 @@ export class MockServerAgent implements ServerAgent {
   async uploadRelease(server: ServerRef, slug: string, _releaseDir: string, releaseName: string) {
     await sleep(1800);
     await this.ensureSiteDirs(server, slug);
-    host(server).sites.get(slug)!.releases.push(releaseName);
+    const site = host(server).sites.get(slug)!;
+    if (!site.releases.includes(releaseName)) site.releases.push(releaseName);
+  }
+
+  async hasRelease(server: ServerRef, slug: string, releaseName: string) {
+    await sleep(100);
+    return host(server).sites.get(slug)?.releases.includes(releaseName) ?? false;
+  }
+
+  async pruneReleases(server: ServerRef, slug: string, keep: string[]) {
+    await sleep(200);
+    const site = host(server).sites.get(slug);
+    if (!site) return [];
+    const removed = site.releases.filter((r) => r !== site.current && !keep.includes(r));
+    site.releases = site.releases.filter((r) => !removed.includes(r));
+    return removed;
   }
 
   async switchRelease(server: ServerRef, slug: string, releaseName: string) {

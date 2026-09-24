@@ -1,59 +1,81 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/db";
 import { queueSubmissionMail } from "@/server/jobs/mail";
+import { FORM_LIMITS, formRateLimited, parseFormBody, readRelay } from "@/server/forms";
 
 export const dynamic = "force-dynamic";
 
-const WINDOW_MS = 10 * 60 * 1000;
-const MAX_PER_WINDOW = 5;
-const hits = new Map<string, number[]>();
-
-function rateLimited(key: string): boolean {
-  const now = Date.now();
-  const list = (hits.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
-  if (list.length >= MAX_PER_WINDOW) return true;
-  list.push(now);
-  hits.set(key, list);
-  return false;
+/** Reads at most `max` bytes of the body; null when it is larger. */
+async function readBounded(request: Request, max: number): Promise<string | null> {
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > max) return null;
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /**
- * Receives contact form submissions relayed by Caddy from every site
- * (/__forms/contact → this route with an X-Site header). Same-origin from the
- * visitor's point of view, so no CORS is involved. The email itself is sent by
- * the worker (mail.send queue) so a mail outage never loses a message.
+ * Receives the contact forms of every site. The visitor posts to
+ * /__forms/contact on the site itself (same origin, no CORS); the site server's
+ * Caddy rewrites it to this route and signs it with the site's relay secret.
+ * The email is sent by the worker (mail.send queue): an outage never loses a message.
  */
 export async function POST(request: Request) {
-  const slug = request.headers.get("x-site");
-  if (!slug) return NextResponse.json({ error: "Site inconnu" }, { status: 400 });
-  const site = await prisma.site.findUnique({ where: { slug } });
-  if (!site || !site.formsEmail)
-    return NextResponse.json({ error: "Formulaire non configuré" }, { status: 404 });
+  const relay = readRelay(request.headers);
+  // Same answer whether the site exists or not: nothing to learn by probing.
+  if (!relay) return NextResponse.json({ error: "Requête refusée" }, { status: 403 });
 
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-  if (rateLimited(`${slug}:${ip}`))
+  const body = await readBounded(request, FORM_LIMITS.maxBodyBytes);
+  if (body === null) return NextResponse.json({ error: "Message trop long" }, { status: 413 });
+  let contentType = request.headers.get("content-type") ?? "";
+  let text = body;
+  if (contentType.startsWith("multipart/form-data")) {
+    // Forms with enctype="multipart/form-data": keep the text fields, drop files.
+    try {
+      const form = await new Response(body, {
+        headers: { "content-type": contentType },
+      }).formData();
+      const fields: Record<string, string> = {};
+      for (const [k, v] of form.entries()) if (typeof v === "string") fields[k] = v;
+      text = JSON.stringify(fields);
+      contentType = "application/json";
+    } catch {
+      return NextResponse.json({ error: "Message illisible" }, { status: 400 });
+    }
+  }
+  const parsed = parseFormBody(text, contentType);
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+
+  const done = () =>
+    parsed.redirect
+      ? // Relative: the browser resolves it on the client's site, never on the pilot.
+        new NextResponse(null, { status: 303, headers: { Location: parsed.redirect } })
+      : NextResponse.json({ ok: true });
+
+  if (parsed.honeypot) return done();
+  if (formRateLimited(relay.slug, relay.clientIp))
     return NextResponse.json({ error: "Trop de messages, réessayez plus tard" }, { status: 429 });
 
-  const contentType = request.headers.get("content-type") ?? "";
-  let fields: Record<string, string> = {};
-  if (contentType.includes("application/json")) {
-    fields = (await request.json()) as Record<string, string>;
-  } else {
-    const form = await request.formData();
-    for (const [k, v] of form.entries()) if (typeof v === "string") fields[k] = v;
-  }
-  if (fields._gotcha || fields.website) return NextResponse.json({ ok: true }); // honeypot
-  const clean = Object.fromEntries(
-    Object.entries(fields)
-      .filter(([k]) => !k.startsWith("_"))
-      .map(([k, v]) => [k.slice(0, 64), String(v).slice(0, 5000)]),
-  );
-  if (Object.keys(clean).length === 0)
-    return NextResponse.json({ error: "Message vide" }, { status: 400 });
+  const site = await prisma.site.findUnique({ where: { slug: relay.slug } });
+  if (!site || site.status === "draft")
+    return NextResponse.json({ error: "Requête refusée" }, { status: 403 });
+  if (!site.formsEmail)
+    return NextResponse.json({ error: "Formulaire non configuré" }, { status: 404 });
 
-  const env = request.headers.get("x-site-env") === "preview" ? "preview" : "production";
   const submission = await prisma.formSubmission.create({
-    data: { siteId: site.id, payload: clean, fromIp: ip, env },
+    data: { siteId: site.id, payload: parsed.fields, fromIp: relay.clientIp, env: relay.env },
   });
   try {
     await queueSubmissionMail(submission.id);
@@ -61,11 +83,5 @@ export async function POST(request: Request) {
     // The submission is stored; the site page offers to resend it.
     console.error("[forms] queue failed", err instanceof Error ? err.message : err);
   }
-
-  const redirect = fields._redirect;
-  if (redirect && /^\/[^/]/.test(redirect)) {
-    const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
-    return NextResponse.redirect(`https://${host}${redirect}`, 303);
-  }
-  return NextResponse.json({ ok: true });
+  return done();
 }

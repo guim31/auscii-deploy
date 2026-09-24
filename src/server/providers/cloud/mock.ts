@@ -17,15 +17,24 @@ export class MockCloudProvider implements CloudProvider {
     return MOCK_OFFERS;
   }
 
-  async createServer(input: {
-    name: string;
-    offer: string;
-    zone: string;
-    cloudInit: string;
-  }): Promise<CloudServer> {
+  async createServer(
+    input: {
+      name: string;
+      offer: string;
+      zone: string;
+      cloudInit: string;
+    },
+    hooks?: { onCreated?: (server: CloudServer) => Promise<void> },
+  ): Promise<CloudServer> {
     await sleep(1500);
     if (!MOCK_OFFERS.some((o) => o.id === input.offer))
       throw new Error(`Offre inconnue : ${input.offer}`);
+    // Like the real provider, an interrupted order under the same name is resumed.
+    const existing = await this.findServerByName(input.name, input.zone);
+    if (existing) {
+      await hooks?.onCreated?.({ ...existing });
+      return existing;
+    }
     const providerId = `mock-srv-${hashInt(input.name, 1_000_000)}`;
     const server: CloudServer & { createdAt: number } = {
       providerId,
@@ -35,7 +44,14 @@ export class MockCloudProvider implements CloudProvider {
       createdAt: Date.now(),
     };
     servers.set(providerId, server);
+    await hooks?.onCreated?.({ ...server });
     return server;
+  }
+
+  async findServerByName(name: string, zone: string): Promise<CloudServer | null> {
+    await sleep(300);
+    for (const s of servers.values()) if (s.name === name && s.zone === zone) return s;
+    return null;
   }
 
   async getServer(providerId: string): Promise<CloudServer> {

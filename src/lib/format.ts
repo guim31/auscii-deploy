@@ -1,5 +1,12 @@
-const dateTime = new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeStyle: "short" });
-const dateOnly = new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" });
+// Always Paris time: the server renders in UTC (containers), the browser in its own zone;
+// a fixed zone gives the same text on both sides (no hydration mismatch, no shifted hours).
+const TIME_ZONE = "Europe/Paris";
+const dateTime = new Intl.DateTimeFormat("fr-FR", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: TIME_ZONE,
+});
+const dateOnly = new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeZone: TIME_ZONE });
 const money = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" });
 
 export function formatDateTime(d: Date | string | null | undefined): string {
@@ -13,8 +20,24 @@ export function formatDate(d: Date | string | null | undefined): string {
 }
 
 export function formatEuro(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "—";
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
   return money.format(n);
+}
+
+/** Amount in the given currency (EUR when unknown). */
+export function formatMoney(n: number | null | undefined, currency?: string | null): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  if (!currency || currency === "EUR") return money.format(n);
+  try {
+    return new Intl.NumberFormat("fr-FR", { style: "currency", currency }).format(n);
+  } catch {
+    return `${n.toFixed(2)} ${currency}`;
+  }
+}
+
+/** "1 fichier", "3 fichiers". */
+export function plural(n: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${n} ${n > 1 ? pluralForm : singular}`;
 }
 
 export function daysUntil(d: Date | string | null | undefined): number | null {

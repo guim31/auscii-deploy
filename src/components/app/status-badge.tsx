@@ -40,7 +40,7 @@ export function DeployStatusBadge({ status }: { status: DeployStatus }) {
 }
 
 export const DEPLOY_KIND_LABEL = {
-  provision: "Provisioning",
+  provision: "Préparation de l'hébergement",
   deploy: "Préproduction",
   promote: "Production",
   rollback: "Retour arrière",

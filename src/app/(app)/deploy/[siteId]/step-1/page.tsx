@@ -2,8 +2,9 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/session";
 import { placementForSite } from "@/server/sites";
-import { getSettings } from "@/server/settings";
 import { DomainStep, type PlacementView } from "@/components/wizard/domain-step";
+import { matchesCurrentMode } from "@/server/mode";
+import { HOSTED_SITE_STATUSES } from "@/server/jobs/steps/server";
 
 export const dynamic = "force-dynamic";
 
@@ -14,21 +15,24 @@ export default async function Step1Page({ params }: { params: Promise<{ siteId: 
     where: { id: siteId },
     include: { domainRecord: true },
   });
-  if (!site) notFound();
-  if (site.status !== "draft" && site.status !== "error") redirect(`/deploy/${siteId}/step-2`);
+  if (!site || !(await matchesCurrentMode(site))) notFound();
+  if (site.liveReleaseId || (site.status !== "draft" && site.status !== "error"))
+    redirect(`/deploy/${siteId}/step-2`);
 
   const placement = await placementForSite(siteId);
-  const settings = await getSettings();
   const gandiConfigured =
-    settings.demoMode ||
-    Boolean(await prisma.integration.findUnique({ where: { provider: "gandi" } }));
+    site.isDemo || Boolean(await prisma.integration.findUnique({ where: { provider: "gandi" } }));
   const view: PlacementView =
     placement.kind === "existing"
       ? {
           kind: "existing",
           serverName: placement.server.name,
           sitesCount: await prisma.site.count({
-            where: { serverId: placement.server.id, status: { in: ["ready", "preview", "live"] } },
+            where: {
+              serverId: placement.server.id,
+              id: { not: site.id },
+              status: { in: [...HOSTED_SITE_STATUSES] },
+            },
           }),
           status: placement.server.status,
         }
@@ -36,6 +40,7 @@ export default async function Step1Page({ params }: { params: Promise<{ siteId: 
           kind: "new-server",
           offerId: placement.offerId,
           offerPrice: placement.offerPrice,
+          offerError: placement.offerError,
           reasons: placement.reasons,
         };
 

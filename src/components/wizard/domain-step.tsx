@@ -18,12 +18,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { formatEuro } from "@/lib/format";
+import { formatEuro, formatMoney } from "@/lib/format";
 import { normalizeFqdn } from "@/lib/slug";
 
 export type PlacementView =
   | { kind: "existing"; serverName: string; sitesCount: number; status: string }
-  | { kind: "new-server"; offerId: string; offerPrice: number | null; reasons: string[] };
+  | {
+      kind: "new-server";
+      offerId: string;
+      offerPrice: number | null;
+      offerError: string | null;
+      reasons: string[];
+    };
 
 export function DomainStep({
   siteId,
@@ -70,9 +76,11 @@ export function DomainStep({
   const normalized = normalizeFqdn(fqdn);
   const checked = check?.fqdn === normalized ? check : null;
   const needsPurchase = !owned;
+  const serverOrderBlocked = placement.kind === "new-server" && placement.offerPrice === null;
   const canSubmit =
     clientName.trim().length >= 2 &&
     normalized.length > 3 &&
+    !serverOrderBlocked &&
     (owned || (checked?.available ?? false));
 
   function runCheck(value = fqdn) {
@@ -107,7 +115,7 @@ export function DomainStep({
         setError(res.error);
         return;
       }
-      toast.success("Provisioning lancé");
+      toast.success("Préparation lancée");
       router.push(`/deploy/${siteId}/step-2`);
     });
   }
@@ -129,8 +137,8 @@ export function DomainStep({
               <AlertTitle>Gandi n'est pas configuré</AlertTitle>
               <AlertDescription>
                 Indiquez un domaine que vous possédez déjà. Les enregistrements DNS à créer seront
-                affichés sur la page du site après le provisioning. L'achat automatique arrive avec
-                l'intégration Gandi.
+                affichés sur la page du site une fois l'infrastructure prête. Pour acheter un
+                domaine depuis l'outil, configurez d'abord Gandi (Paramètres &gt; Intégrations).
               </AlertDescription>
             </Alert>
           )}
@@ -158,7 +166,6 @@ export function DomainStep({
                     runCheck();
                   }
                 }}
-                disabled={owned}
               />
               {!owned && (
                 <Button
@@ -183,7 +190,8 @@ export function DomainStep({
                 )}
                 {checked.available ? (
                   <>
-                    {checked.fqdn} est disponible · {formatEuro(checked.price)} la première année
+                    {checked.fqdn} est disponible · {formatMoney(checked.price, checked.currency)}{" "}
+                    la première année
                   </>
                 ) : (
                   <>
@@ -206,7 +214,7 @@ export function DomainStep({
                     }}
                     className="hover:bg-accent rounded-full border px-2.5 py-1 disabled:opacity-40"
                   >
-                    {s.fqdn} {s.available ? `· ${formatEuro(s.price)}` : "· pris"}
+                    {s.fqdn} {s.available ? `· ${formatMoney(s.price, s.currency)}` : "· pris"}
                   </button>
                 ))}
               </div>
@@ -218,7 +226,7 @@ export function DomainStep({
                 onChange={(e) => setOwned(e.target.checked)}
                 className="size-4"
               />
-              Ce domaine est déjà dans le compte Gandi de l'agence (pas d'achat, DNS seulement)
+              Ce domaine existe déjà (compte Gandi de l'agence ou autre registrar) : pas d'achat
             </label>
           </div>
 
@@ -268,13 +276,20 @@ export function DomainStep({
                 {placement.reasons.length > 0 && (
                   <p className="text-muted-foreground text-xs">{placement.reasons.join(" · ")}</p>
                 )}
+                {placement.offerPrice === null && (
+                  <p className="text-destructive text-xs">
+                    Commande impossible : {placement.offerError ?? "prix de l'offre indisponible"}.
+                    Vérifiez l'intégration Scaleway, ou ajoutez un serveur existant dans Paramètres
+                    &gt; Serveurs.
+                  </p>
+                )}
                 <label className="flex items-start gap-2">
                   <input
                     type="checkbox"
                     className="mt-0.5 size-4"
                     checked={confirmServer}
                     onChange={(e) => setConfirmServer(e.target.checked)}
-                    disabled={!isAdmin}
+                    disabled={!isAdmin || placement.offerPrice === null}
                   />
                   <span>
                     Je confirme la commande de ce serveur
@@ -300,8 +315,8 @@ export function DomainStep({
                 <>
                   <p>
                     <strong>{checked.fqdn}</strong> sera acheté chez Gandi pour{" "}
-                    <strong>{formatEuro(checked.price)}</strong> (première année, renouvellement
-                    annuel).
+                    <strong>{formatMoney(checked.price, checked.currency)}</strong> (première année,
+                    renouvellement annuel).
                   </p>
                   <label className="flex items-start gap-2">
                     <input
@@ -346,7 +361,7 @@ export function DomainStep({
           data-testid="start-provisioning"
         >
           {submitting && <Loader2Icon className="animate-spin" />}
-          Lancer le provisioning
+          Préparer l'hébergement
         </Button>
       </div>
     </div>

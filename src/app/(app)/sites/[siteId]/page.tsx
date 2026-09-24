@@ -10,6 +10,7 @@ import {
   GitBranchIcon,
 } from "lucide-react";
 import { requireUser } from "@/server/session";
+import { matchesCurrentMode } from "@/server/mode";
 import { getSiteDetail } from "@/server/sites";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
@@ -52,7 +53,7 @@ export default async function SitePage({
   const { siteId } = await params;
   const { deployment: focusId } = await searchParams;
   const site = await getSiteDetail(siteId);
-  if (!site) notFound();
+  if (!site || !(await matchesCurrentMode(site))) notFound();
   const ssl = site.sslChecks[0];
   const settings = await getSettings();
   const dnsRecords =
@@ -269,7 +270,7 @@ export default async function SitePage({
                         </div>
                       </TableCell>
                       <TableCell className="text-right">
-                        {site.status === "live" && site.liveReleaseId !== r.id && r.gitTag && (
+                        {site.liveReleaseId && site.liveReleaseId !== r.id && r.gitTag && (
                           <RollbackButton
                             siteId={site.id}
                             releaseId={r.id}
@@ -283,7 +284,8 @@ export default async function SitePage({
                         )}
                         {site.stagingReleaseId !== r.id &&
                           site.liveReleaseId !== r.id &&
-                          !r.gitTag && (
+                          !r.gitTag &&
+                          (r.analysis as { ok?: boolean } | null)?.ok && (
                             <Button size="sm" variant="ghost" asChild>
                               <Link href={`/deploy/${site.id}/step-4?release=${r.id}`}>
                                 Mettre en ligne

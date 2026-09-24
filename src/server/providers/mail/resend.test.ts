@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { defaultSender, recordsFromResend, ResendProvider } from "./resend";
+import {
+  defaultSender,
+  idempotencyHeader,
+  recordsFromResend,
+  ResendProvider,
+  statusOf,
+} from "./resend";
 import { describeResendError, ResendError } from "./resend-client";
 import { ProviderNotConfiguredError } from "../types";
 
@@ -187,8 +193,72 @@ describe("ResendProvider", () => {
     });
     const me = await new ResendProvider(creds, impl).whoAmI();
     expect(me.domains).toEqual([
-      { id: "dom_1", name: "auscii.site", status: "verified", records: [] },
+      { id: "dom_1", name: "auscii.site", status: "verified", rawStatus: "verified", records: [] },
     ]);
+  });
+
+  it("falls back to the agency sender when the settings leave it empty", async () => {
+    const { impl, calls } = fakeFetch({
+      "POST https://api.resend.com/emails": () => ({ status: 200, body: { id: "email_3" } }),
+    });
+    const provider = new ResendProvider({ apiKey: KEY, from: "  " }, impl, {
+      defaultFrom: defaultSender("AUSCII", "auscii.site"),
+    });
+    await provider.send({ to: "a@b.fr", subject: "s", text: "t" });
+    expect(JSON.parse(calls[0].body!).from).toBe("AUSCII <no-reply@auscii.site>");
+    // A configured sender still wins over the default.
+    await new ResendProvider(creds, impl, { defaultFrom: "X <x@y.z>" }).send({
+      to: "a@b.fr",
+      subject: "s",
+      text: "t",
+    });
+    expect(JSON.parse(calls[1].body!).from).toBe(creds.from);
+  });
+
+  it("sends the idempotency key as the Idempotency-Key header", async () => {
+    const { impl, calls } = fakeFetch({
+      "POST https://api.resend.com/emails": () => ({ status: 200, body: { id: "email_4" } }),
+    });
+    const provider = new ResendProvider(creds, impl);
+    await provider.send({ to: "a@b.fr", subject: "s", text: "t", idempotencyKey: "form-42" });
+    await provider.send({ to: "a@b.fr", subject: "s", text: "t" });
+    expect(calls[0].headers["Idempotency-Key"]).toBe("form-42");
+    expect(calls[1].headers["Idempotency-Key"]).toBeUndefined();
+    expect(JSON.parse(calls[0].body!)).not.toHaveProperty("idempotencyKey");
+    expect(idempotencyHeader("k".repeat(300))).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(idempotencyHeader("k".repeat(300))).toBe(idempotencyHeader("k".repeat(300)));
+  });
+
+  it("explains a sending-only key refused on /domains", async () => {
+    const { impl } = fakeFetch({
+      "GET https://api.resend.com/domains": () => ({
+        status: 401,
+        body: {
+          statusCode: 401,
+          name: "restricted_api_key",
+          message: "This API key is restricted to only send emails",
+        },
+      }),
+    });
+    await expect(new ResendProvider(creds, impl).whoAmI()).rejects.toThrow(
+      /limitée à l'envoi d'emails/,
+    );
+  });
+
+  it("never leaks a key pasted with an inner newline", async () => {
+    let fetched = false;
+    const err = await new ResendProvider(
+      { apiKey: `${KEY}\nre_other`, from: creds.from },
+      async () => {
+        fetched = true;
+        return new Response("{}");
+      },
+    )
+      .send({ to: "a@b.fr", subject: "s", text: "t" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ResendError);
+    expect((err as Error).message).not.toContain(KEY);
+    expect(fetched).toBe(false);
   });
 
   it("rejects an invalid key with a readable message", async () => {
@@ -223,6 +293,28 @@ describe("recordsFromResend", () => {
       { name: "resend._domainkey", type: "TXT", values: ["p=abc"], ttl: 300 },
       { name: "track", type: "CNAME", values: ["feedback.resend.com."], ttl: 300 },
     ]);
+  });
+});
+
+describe("statusOf", () => {
+  it("resolves partial statuses from the sending records", () => {
+    expect(statusOf("verified")).toBe("verified");
+    expect(statusOf("something_new")).toBe("not_started");
+    const sendingOk = [
+      { record: "SPF", status: "verified" },
+      { record: "DKIM", status: "verified" },
+      { record: "Receiving", type: "MX", status: "pending" },
+    ];
+    expect(statusOf("partially_verified", sendingOk)).toBe("verified");
+    expect(statusOf("partially_failed", sendingOk)).toBe("verified");
+    const dkimPending = [
+      { record: "SPF", status: "verified" },
+      { record: "DKIM", status: "pending" },
+    ];
+    expect(statusOf("partially_verified", dkimPending)).toBe("pending");
+    expect(statusOf("partially_failed", dkimPending)).toBe("failed");
+    // The list endpoint has no records: not verified until the detail says so.
+    expect(statusOf("partially_verified")).toBe("pending");
   });
 });
 

@@ -1,6 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/session";
+import { matchesCurrentMode } from "@/server/mode";
+import { previewUrl } from "@/server/releases/preview-url";
 import { getSettings, previewHostFor } from "@/server/settings";
 import { LaunchStep, type DeploymentView } from "@/components/wizard/launch-step";
 import type { StepState } from "@/server/jobs/pipeline";
@@ -43,16 +45,17 @@ export default async function Step4Page({
   searchParams,
 }: {
   params: Promise<{ siteId: string }>;
-  searchParams: Promise<{ release?: string }>;
+  searchParams: Promise<{ release?: string | string[] }>;
 }) {
   await requireUser();
   const { siteId } = await params;
-  const { release: releaseParam } = await searchParams;
+  const { release: rawRelease } = await searchParams;
+  const releaseParam = typeof rawRelease === "string" ? rawRelease : undefined;
   const site = await prisma.site.findUnique({
     where: { id: siteId },
     include: { releases: { orderBy: { version: "desc" }, take: 1 } },
   });
-  if (!site) notFound();
+  if (!site || !(await matchesCurrentMode(site))) notFound();
   const releaseId = releaseParam ?? site.stagingReleaseId ?? site.releases[0]?.id;
   if (!releaseId) redirect(`/deploy/${siteId}/step-3`);
   const release = await prisma.release.findFirst({ where: { id: releaseId, siteId } });
@@ -63,7 +66,8 @@ export default async function Step4Page({
         <TriangleAlertIcon />
         <AlertTitle>Infrastructure incomplète</AlertTitle>
         <AlertDescription>
-          Terminez d'abord l'étape 2 (provisioning) avant de mettre le site en ligne.
+          Terminez d'abord l'étape 2 (préparation de l'hébergement) avant de mettre le site en
+          ligne.
         </AlertDescription>
       </Alert>
     );
@@ -90,6 +94,7 @@ export default async function Step4Page({
       domain={site.domain}
       previewUrl={`https://${previewHost}`}
       previewSecretUrl={`https://${previewHost}/__preview/${site.previewToken}`}
+      localPreviewUrl={previewUrl(release.id)}
       demo={site.isDemo}
       stagingDone={site.stagingReleaseId === release.id}
       liveDone={site.liveReleaseId === release.id}

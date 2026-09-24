@@ -2,22 +2,22 @@
 
 ## Décisions de cadrage
 
-| Sujet                  | Décision                                                                                                                                                                           |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Réalité                | Vraies intégrations dès la v1, **mode démo débrayable** (mocks)                                                                                                                    |
-| Type de sites          | Statique (HTML/CSS/JS, ou site buildé). Architecture prête pour Docker en v2                                                                                                       |
-| Source du site         | Upload d'un `.zip` produit localement avec Claude Code                                                                                                                             |
-| Stack de l'outil       | Next.js + TypeScript                                                                                                                                                               |
-| Orchestration VPS      | SSH direct + Caddy (HTTPS automatique). Pas de VitoDeploy                                                                                                                          |
-| Domaines               | Gandi : vérification, **achat avec confirmation explicite**, LiveDNS                                                                                                               |
-| VPS                    | Scaleway, offre DEV1-S par défaut. Commandés automatiquement par l'outil quand la capacité (mesurée) est atteinte                                                                  |
-| Capacité               | Par métriques relevées en SSH (CPU, mémoire, disque, nombre de sites), seuils configurables, plafond de sécurité. Pas de limite fixe                                               |
-| Versionnement          | Un repo GitHub privé par site, branches `staging` / `production`. L'outil s'authentifie comme GitHub App sur l'organisation AUSCII ; les gérants n'ont pas besoin de compte GitHub |
-| Domaine technique      | `auscii.com` (OVH, avec les emails) n'est jamais touché. Un domaine technique dédié chez Gandi porte l'outil (`deploy.…`) et les préproductions (`client.preview.…`)               |
-| Formulaires de contact | Service intégré à l'outil, email via un fournisseur transactionnel                                                                                                                 |
-| Préproduction          | `<client>.preview.auscii.fr`, protégée par lien secret                                                                                                                             |
-| Hébergement de l'outil | VPS pilote dédié, Docker, connexion email + mot de passe                                                                                                                           |
-| Étape 3 du wizard      | Upload + vérification automatique + rapport Claude API, prévisualisation iFrame                                                                                                    |
+| Sujet                  | Décision                                                                                                                                                                                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Réalité                | Vraies intégrations dès la v1, **mode démo débrayable** (mocks)                                                                                                                                                                                                         |
+| Type de sites          | Statique (HTML/CSS/JS, ou site buildé). Architecture prête pour Docker en v2                                                                                                                                                                                            |
+| Source du site         | Upload d'un `.zip` produit localement avec Claude Code                                                                                                                                                                                                                  |
+| Stack de l'outil       | Next.js + TypeScript                                                                                                                                                                                                                                                    |
+| Orchestration VPS      | SSH direct + Caddy (HTTPS automatique). Pas de VitoDeploy                                                                                                                                                                                                               |
+| Domaines               | Gandi : vérification, **achat avec confirmation explicite**, LiveDNS                                                                                                                                                                                                    |
+| VPS                    | Scaleway, offre DEV1-S par défaut. Commandés automatiquement par l'outil quand la capacité (mesurée) est atteinte                                                                                                                                                       |
+| Capacité               | Par métriques relevées en SSH (CPU, mémoire, disque, nombre de sites), seuils configurables, plafond de sécurité. Pas de limite fixe                                                                                                                                    |
+| Versionnement          | Un repo GitHub privé par site, branches `staging` / `production`. L'outil s'authentifie comme GitHub App sur l'organisation AUSCII ; les gérants n'ont pas besoin de compte GitHub                                                                                      |
+| Domaine technique      | `auscii.com` (OVH, avec les emails) n'est jamais touché. Un domaine technique dédié chez Gandi porte l'outil (`deploy.…`) ; un second domaine porte les préproductions (`client.preview.…`), pour que le code des sites clients ne partage jamais le domaine de l'outil |
+| Formulaires de contact | Service intégré à l'outil, email via un fournisseur transactionnel                                                                                                                                                                                                      |
+| Préproduction          | `<client>.preview.<domaine des préproductions>`, protégée par lien secret                                                                                                                                                                                               |
+| Hébergement de l'outil | VPS pilote dédié, Docker, connexion email + mot de passe                                                                                                                                                                                                                |
+| Étape 3 du wizard      | Upload + vérification automatique + rapport Claude API, prévisualisation iFrame                                                                                                                                                                                         |
 
 ## Dashboard
 
@@ -44,7 +44,7 @@
 
 - Nom du client (génère un identifiant `slug` utilisé partout : repo, dossier serveur, sous-domaine preview).
 - Domaine souhaité : vérification de disponibilité Gandi en direct, prix affiché, suggestions d'extensions (`.fr`, `.com`).
-- Cas « ce domaine est déjà à nous chez Gandi » : pas d'achat, DNS seulement.
+- Cas « ce domaine existe déjà » : pas d'achat. S'il est dans le compte Gandi de l'agence avec LiveDNS, l'outil écrit les DNS ; sinon, les enregistrements à créer sont affichés.
 - Email destinataire des formulaires de contact.
 - Serveur choisi automatiquement : carte d'information « Serveur : vps-02 (12 sites) » ou « Un nouveau serveur sera commandé (≈ X €/mois) », avec confirmation par un admin dans ce second cas.
 

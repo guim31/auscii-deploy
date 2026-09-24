@@ -1,7 +1,7 @@
 import { prisma } from "../db";
 import { env } from "../env";
 import { decryptJson } from "../crypto";
-import { isDemoMode } from "../settings";
+import { getSettings, isDemoMode } from "../settings";
 import type { Providers } from "./types";
 import { MockDomainProvider } from "./domain/mock";
 import { GandiProvider, type GandiCredentials } from "./domain/gandi";
@@ -10,7 +10,7 @@ import { ScalewayProvider, type ScalewayCredentials } from "./cloud/scaleway";
 import { MockGitProvider } from "./git/mock";
 import { GitHubProvider, type GitHubCredentials } from "./git/github";
 import { MockMailProvider } from "./mail/mock";
-import { ResendProvider, type ResendCredentials } from "./mail/resend";
+import { defaultSender, ResendProvider, type ResendCredentials } from "./mail/resend";
 import { MockAiProvider } from "./ai/mock";
 import { AnthropicProvider, type AnthropicCredentials } from "./ai/anthropic";
 import { MockServerAgent } from "./agent/mock";
@@ -56,13 +56,16 @@ export function getMockProviders(): Providers {
 }
 
 /**
- * Returns the provider set for the current mode. Demo mode (forced by
- * DEMO_MODE=true, or toggled in the UI) always returns mocks, so the whole
- * pipeline works without network access.
+ * Returns the provider set. Pass `demo` from the entity being processed
+ * (`site.isDemo`, `server.isDemo`): a job must never switch between mocks and
+ * real integrations because someone toggled the demo mode meanwhile. Without
+ * it, the current mode decides (forced by DEMO_MODE=true, or toggled in the UI).
  */
-export async function getProviders(): Promise<Providers> {
-  if (await isDemoMode()) return mocks;
-  const [gandi, scaleway, github, resend, anthropic, ssh] = await Promise.all([
+export async function getProviders(opts?: { demo?: boolean }): Promise<Providers> {
+  const demo = opts?.demo ?? (await isDemoMode());
+  if (demo) return mocks;
+  const [settings, gandi, scaleway, github, resend, anthropic, ssh] = await Promise.all([
+    getSettings(),
     loadCredentials("gandi"),
     loadCredentials("scaleway"),
     loadCredentials("github"),
@@ -75,9 +78,24 @@ export async function getProviders(): Promise<Providers> {
     domain: new GandiProvider(gandi),
     cloud: new ScalewayProvider(scaleway),
     git: new GitHubProvider(github),
-    mail: new ResendProvider(resend),
+    // Same fallback as the settings test email: an empty sender field must not
+    // make form messages and alerts fail.
+    mail: new ResendProvider(resend, undefined, {
+      defaultFrom: defaultSender(settings.agencyName, settings.techDomain),
+    }),
     ai: new AnthropicProvider(anthropic),
-    agent: new SshServerAgent(ssh),
+    agent: new SshServerAgent(ssh, {
+      // First contact with a server: its host key is trusted from now on (TOFU), keep a trace.
+      onHostKeyTrusted: async (server, fingerprint) => {
+        await prisma.auditLog.create({
+          data: {
+            action: "ssh.hostKeyTrusted",
+            target: server.name,
+            details: { serverId: server.id, ip: server.ip, fingerprint },
+          },
+        });
+      },
+    }),
     screenshot: new PlaywrightScreenshotProvider(),
   };
 }

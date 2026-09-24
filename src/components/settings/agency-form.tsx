@@ -33,7 +33,9 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
     agencyName: settings.agencyName,
     alertEmail: settings.alertEmail,
     techDomain: settings.techDomain,
+    previewDomain: settings.previewDomain ?? "",
     previewSubdomain: settings.previewSubdomain,
+    confirmPreviewChange: "",
     defaultOffer: settings.defaultOffer,
     defaultZone: settings.defaultZone,
     gandiOrganizationId: settings.gandiContact.organizationId,
@@ -46,6 +48,7 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
     gandiZip: settings.gandiContact.zip,
     gandiCity: settings.gandiContact.city,
     gandiCountry: settings.gandiContact.country,
+    gandiSiren: settings.gandiContact.siren ?? "",
     diskUsedPctMax: String(settings.capacity.diskUsedPctMax),
     ramUsedPctMax: String(settings.capacity.ramUsedPctMax),
     loadPerVcpuMax: String(settings.capacity.loadPerVcpuMax),
@@ -59,7 +62,10 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
     startTransition(async () => {
       const res = await saveAgencyAction(values);
       if (!res.ok) toast.error(res.error);
-      else toast.success("Paramètres enregistrés");
+      else {
+        toast.success("Paramètres enregistrés");
+        setValues((v) => ({ ...v, confirmPreviewChange: "" }));
+      }
       router.refresh();
     });
   }
@@ -79,8 +85,10 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
         <CardHeader>
           <CardTitle className="text-base">Identité et domaine technique</CardTitle>
           <CardDescription>
-            Le domaine technique (chez Gandi) porte l'outil (deploy.…) et les préproductions
-            (client.preview.…). Le domaine principal de l'agence n'est jamais modifié.
+            Le domaine technique (chez Gandi) porte l'outil (deploy.…) et l'adresse d'envoi des
+            emails. Les préproductions des clients doivent vivre sur un autre domaine, acheté pour
+            cet usage : le code des sites clients ne partage alors jamais les cookies de l'outil. Le
+            domaine principal de l'agence n'est jamais modifié.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -104,7 +112,18 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
             label="Domaine technique"
             value={values.techDomain}
             onChange={set("techDomain")}
-            hint={`Préproductions : client.${values.previewSubdomain}.${values.techDomain}`}
+          />
+          <Field
+            id="previewDomain"
+            label="Domaine des préproductions"
+            value={values.previewDomain}
+            onChange={set("previewDomain")}
+            placeholder="auscii-preview.site"
+            hint={
+              values.previewDomain
+                ? `Préproductions : client.${values.previewSubdomain}.${values.previewDomain}`
+                : `Vide : client.${values.previewSubdomain}.${values.techDomain} (déconseillé, même domaine que l'outil)`
+            }
           />
           <Field
             id="previewSubdomain"
@@ -112,6 +131,20 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
             value={values.previewSubdomain}
             onChange={set("previewSubdomain")}
           />
+          <label className="flex items-start gap-2 text-xs sm:col-span-2">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4"
+              checked={values.confirmPreviewChange === "yes"}
+              onChange={(e) =>
+                setValues({ ...values, confirmPreviewChange: e.target.checked ? "yes" : "" })
+              }
+            />
+            <span className="text-muted-foreground">
+              Je sais que changer le domaine technique ou celui des préproductions casse les liens
+              de préproduction déjà envoyés : il faudra redéployer ces préproductions.
+            </span>
+          </label>
         </CardContent>
       </Card>
       <Card>
@@ -124,7 +157,7 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
             label="Offre Scaleway par défaut"
             value={values.defaultOffer}
             onChange={set("defaultOffer")}
-            hint="DEV1-S : 2 vCPU, 2 Go, 20 Go NVMe"
+            hint="Identifiant Scaleway exact, ex. DEV1-S (2 vCPU, 2 Go). Jamais remplacé par une autre offre."
           />
           <Field
             id="defaultZone"
@@ -207,6 +240,13 @@ export function AgencyForm({ settings, demoForced }: { settings: Settings; demoF
             value={values.gandiCountry}
             onChange={set("gandiCountry")}
             maxLength={2}
+          />
+          <Field
+            id="gandiSiren"
+            label="SIREN de l'agence"
+            value={values.gandiSiren}
+            onChange={set("gandiSiren")}
+            hint="Exigé par l'AFNIC pour qu'une société soit titulaire d'un domaine en .fr."
           />
         </CardContent>
       </Card>

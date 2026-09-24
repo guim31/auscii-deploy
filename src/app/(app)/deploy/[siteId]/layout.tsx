@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/server/db";
 import { Stepper } from "@/components/wizard/stepper";
 import { SiteStatusBadge } from "@/components/app/status-badge";
+import { matchesCurrentMode } from "@/server/mode";
 
 const REACHABLE: Record<string, number> = {
   draft: 1,
@@ -21,7 +22,7 @@ export default async function WizardLayout({
 }) {
   const { siteId } = await params;
   const site = await prisma.site.findUnique({ where: { id: siteId } });
-  if (!site) notFound();
+  if (!site || !(await matchesCurrentMode(site))) notFound();
   return (
     <div className="mx-auto max-w-4xl">
       <div className="mb-4 flex items-center gap-3">

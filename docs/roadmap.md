@@ -2,22 +2,25 @@
 
 Chaque phase est une pull request testable indépendamment.
 
-La **v1 est livrée** : phases 0 à 8, pilote installable sur un VPS neuf. La **v2**
+La **v1 est développée** : phases 0 à 8. Elle n'est **pas encore en production** : le
+pilote n'a jamais été installé, et les comptes réels arrivent. Une passe de corrections
+avant mise en service (phase 8 bis) a suivi l'audit de septembre 2026. La **v2**
 commence à la phase 9 et se limite à l'espace client de relecture, cadré dans
 `scope-v2.md`. La numérotation des phases continue.
 
-| Phase | Livrable                                                                                                                    | Critère de fin                                                              | État    |
-| ----- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------- |
-| 0     | Documents de cadrage (`docs/`, `CLAUDE.md`)                                                                                 | Validés, aucun code                                                         | Fait    |
-| 1     | Squelette Next.js, Prisma, auth, layout, parcours complet en **mode démo** (dashboard, wizard 4 étapes, console SSE, mocks) | Démo cliquable identique au futur réel                                      | Fait    |
-| 2     | Déploiement réel SSH + Caddy sur un VPS existant : staging, production, rollback, captures Playwright, contrôle HTTPS       | Un site statique en ligne en HTTPS depuis l'outil                           | Fait    |
-| 3     | Gandi réel : vérification, achat avec confirmation, LiveDNS (production et preview)                                         | Domaine acheté et pointé depuis l'outil                                     | Fait    |
-| 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention                          | Fait    |
-| 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                                               | Fait    |
-| 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production                                     | Fait    |
-| 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                                                        | Fait    |
-| 8     | Docker Compose du pilote, runbook complet, durcissement, e2e                                                                | Installation reproductible sur un VPS neuf                                  | Fait    |
-| 9     | **v2** — Espace client de relecture : commentaires ancrés sur la préproduction                                              | Un client commente depuis son lien, le gérant voit les retours dans l'outil | À faire |
+| Phase | Livrable                                                                                                                    | Critère de fin                                                                   | État      |
+| ----- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | --------- |
+| 0     | Documents de cadrage (`docs/`, `CLAUDE.md`)                                                                                 | Validés, aucun code                                                              | Fait      |
+| 1     | Squelette Next.js, Prisma, auth, layout, parcours complet en **mode démo** (dashboard, wizard 4 étapes, console SSE, mocks) | Démo cliquable identique au futur réel                                           | Fait      |
+| 2     | Déploiement réel SSH + Caddy sur un VPS existant : staging, production, rollback, captures Playwright, contrôle HTTPS       | Un site statique en ligne en HTTPS depuis l'outil                                | Fait      |
+| 3     | Gandi réel : vérification, achat avec confirmation, LiveDNS (production et preview)                                         | Domaine acheté et pointé depuis l'outil                                          | Fait      |
+| 4     | Scaleway réel : commande automatique, cloud-init, gestion de capacité                                                       | Nouveau serveur commandé et prêt sans intervention                               | Fait      |
+| 5     | GitHub réel (GitHub App sur l'organisation) : repo par site, promotion, tags                                                | Historique visible sur GitHub                                                    | Fait      |
+| 6     | Resend réel pour les formulaires et notifications                                                                           | Email reçu depuis un site en production                                          | Fait      |
+| 7     | Analyse Claude API à l'étape 3                                                                                              | Rapport réel affiché                                                             | Fait      |
+| 8     | Docker Compose du pilote, runbook complet, durcissement, e2e                                                                | Installation reproductible sur un VPS neuf                                       | À valider |
+| 8 bis | Corrections avant mise en service (audit de septembre 2026)                                                                 | Checklist de validation du runbook passée sur un VPS neuf avec les vrais comptes | En cours  |
+| 9     | **v2** — Espace client de relecture : commentaires ancrés sur la préproduction                                              | Un client commente depuis son lien, le gérant voit les retours dans l'outil      | À faire   |
 
 ## Ce que la phase 1 contient
 
@@ -79,6 +82,17 @@ commence à la phase 9 et se limite à l'espace client de relecture, cadré dans
 - Scripts d'exploitation : `install.sh` (installation à blanc et durcissement du VPS), `update.sh` (mise à jour avec retour arrière automatique), `backup.sh` et `restore.sh` (base et fichiers, rotation locale et Object Storage).
 - Durcissement : route `/api/health`, en-têtes de sécurité côté Caddy et Next, limitation des tentatives de connexion stockée en base, refus de démarrer avec les secrets d'exemple sur un hôte public, prévisualisation servie en origine opaque pour qu'un zip déposé ne puisse pas agir au nom de l'utilisateur connecté.
 - Runbook d'exploitation : installation, mise à jour, sauvegardes, rotation des clés, tableau des incidents.
+
+## Ce que la phase 8 bis contient
+
+Corrections issues de l'audit complet du dépôt, avant le branchement des vrais comptes :
+
+- **Actions payantes** : confirmation admin enregistrée sur le déploiement (une relance ne peut plus commander ni acheter), prix revérifié côté serveur, commande de serveur et achat de domaine idempotents (la ligne existe avant l'appel, la reprise retrouve la ressource), jamais d'offre Scaleway de remplacement, suppression des volumes SBS.
+- **Fiabilité** : un déploiement est pris atomiquement et n'est jamais rejoué par pg-boss, un seul déploiement à la fois par site, les déploiements interrompus sont marqués en échec, un site en ligne le reste après un échec, releases immuables et purgées, écriture sûre des blocs Caddy, retour arrière instantané quand la version est encore sur le serveur.
+- **Mode démo** : chaque job utilise le mode de l'entité traitée, jamais celui de l'écran.
+- **Formulaires** : relais réécrit vers `/api/forms`, authentifié par un secret par site, taille et débit bornés par visiteur ; lien de préproduction réparé.
+- **Sécurité** : préproductions sur un domaine distinct, aperçu de l'étape 3 sur une origine dédiée avec jeton signé, fichiers cachés écartés des zips et jamais servis, redirection ouverte et boucle de connexion corrigées, plugin `admin` de better-auth retiré, mots de passe de 12 caractères.
+- **Pilote** : images Docker corrigées (droits de `/data`, OpenSSL pour Prisma), sauvegarde, restauration et mise à jour fiabilisées, reprise après sinistre documentée, test de fumée des images en CI.
 
 ## Ce que la phase 9 contiendra
 

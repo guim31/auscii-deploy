@@ -9,6 +9,8 @@ const ITEMS = [
   { href: "/settings/integrations", label: "Intégrations", admin: true },
   { href: "/settings/agency", label: "Agence", admin: true },
   { href: "/settings/users", label: "Utilisateurs", admin: true },
+  { href: "/settings/audit", label: "Journal des actions", admin: true },
+  { href: "/settings/account", label: "Mon compte" },
 ];
 
 export function SettingsNav({ isAdmin }: { isAdmin: boolean }) {

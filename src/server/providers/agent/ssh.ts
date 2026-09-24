@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { Client, type ClientChannel, type ConnectConfig } from "ssh2";
 import * as tar from "tar";
@@ -8,30 +9,56 @@ import { READY_MARKER } from "../../deploy/bootstrap";
 import type { ServerAgent, ServerMetrics, ServerRef, TlsCheck } from "../types";
 import { ProviderNotConfiguredError } from "../types";
 import { METRICS_COMMAND, parseMetrics } from "./metrics";
+import {
+  DEFAULT_CADDY_PATHS,
+  hasReleaseScript,
+  pruneReleasesScript,
+  reloadCaddyScript,
+  removeCaddySiteScript,
+  shellQuote,
+  uploadReleaseScript,
+  writeCaddySiteScript,
+} from "./remote-scripts";
 
 export type SshCredentials = { privateKey: string; publicKey: string };
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
 
+export type SshAgentOptions = {
+  /** Longest a single remote command may run (default 5 min). */
+  commandTimeoutMs?: number;
+  /** Longest a release upload may run (default 15 min). */
+  uploadTimeoutMs?: number;
+  /**
+   * Called when a server's host key is trusted for the first time (TOFU), so
+   * the caller can record it in a deployment log. Always logged on the console.
+   */
+  onHostKeyTrusted?: (server: ServerRef, fingerprint: string) => void | Promise<void>;
+};
+
 const SITES_ROOT = "/srv/sites";
-const CADDY_SITES = "/etc/caddy/sites";
 const CONNECT_TIMEOUT_MS = 20_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 const MAX_LOG = 4000;
+/** Output kept in memory per command: metrics and logs are small, a runaway command is not. */
+const MAX_OUTPUT = 1024 * 1024;
+const RELOAD_COMMAND = "sudo -n /usr/bin/systemctl reload caddy";
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function assertSlug(slug: string): string {
+export function assertSlug(slug: string): string {
   if (!/^[a-z0-9][a-z0-9-]{0,60}$/.test(slug))
     throw new Error(`Identifiant de site invalide : ${slug}`);
   return slug;
 }
 
-function assertReleaseName(name: string): string {
+export function assertReleaseName(name: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$/.test(name))
     throw new Error(`Nom de release invalide : ${name}`);
   return name;
+}
+
+function trimOutput(res: ExecResult): string {
+  return (res.stderr || res.stdout).trim().slice(0, MAX_LOG) || `code ${res.code}`;
 }
 
 /**
@@ -41,7 +68,16 @@ function assertReleaseName(name: string): string {
  */
 export class SshServerAgent implements ServerAgent {
   readonly name = "ssh";
-  constructor(private readonly creds: SshCredentials | null) {}
+  private readonly commandTimeoutMs: number;
+  private readonly uploadTimeoutMs: number;
+
+  constructor(
+    private readonly creds: SshCredentials | null,
+    private readonly options: SshAgentOptions = {},
+  ) {
+    this.commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    this.uploadTimeoutMs = options.uploadTimeoutMs ?? DEFAULT_UPLOAD_TIMEOUT_MS;
+  }
 
   private async connect(server: ServerRef): Promise<Client> {
     if (!this.creds?.privateKey)
@@ -65,6 +101,7 @@ export class SshServerAgent implements ServerAgent {
       privateKey: this.creds.privateKey,
       readyTimeout: CONNECT_TIMEOUT_MS,
       keepaliveInterval: 10_000,
+      keepaliveCountMax: 3,
       hostVerifier: (key: Buffer) => {
         seen = fingerprintOf(key);
         return known === null || known === seen;
@@ -72,9 +109,20 @@ export class SshServerAgent implements ServerAgent {
     };
 
     const client = new Client();
+    let connected = false;
     await new Promise<void>((resolve, reject) => {
-      client.once("ready", resolve);
-      client.once("error", (err: Error & { level?: string }) => {
+      client.once("ready", () => {
+        connected = true;
+        resolve();
+      });
+      // Persistent listener: ssh2 may emit several errors (e.g. a reset after
+      // a timeout). Without a listener, an "error" event crashes the worker.
+      // Once connected, the commands in flight fail through the "close" event.
+      client.on("error", (err: Error & { level?: string }) => {
+        if (connected) {
+          console.warn(`[ssh] ${server.name} : ${err.message}`);
+          return;
+        }
         if (known && seen && known !== seen) {
           reject(
             new Error(
@@ -89,8 +137,13 @@ export class SshServerAgent implements ServerAgent {
       });
       client.connect(config);
     });
-    if (!known && seen)
+    if (!known && seen) {
       await prisma.server.update({ where: { id: server.id }, data: { sshHostKey: seen } });
+      console.warn(
+        `[ssh] Clé d'hôte de ${server.name} (${server.ip}:${port}) enregistrée au premier contact : ${seen}`,
+      );
+      await Promise.resolve(this.options.onHostKeyTrusted?.(server, seen)).catch(() => undefined);
+    }
     return client;
   }
 
@@ -106,18 +159,64 @@ export class SshServerAgent implements ServerAgent {
     }
   }
 
-  private run(client: Client, command: string, stdin?: NodeJS.ReadableStream): Promise<ExecResult> {
+  /**
+   * Runs one command. Rejects when it exceeds its timeout (the connection is
+   * then torn down, which kills the remote command) or when the connection
+   * drops before the command ends.
+   */
+  private run(
+    client: Client,
+    command: string,
+    stdin?: NodeJS.ReadableStream,
+    timeoutMs = this.commandTimeoutMs,
+  ): Promise<ExecResult> {
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        client.off("close", onClientClose);
+        fn();
+      };
+      const onClientClose = () =>
+        finish(() => reject(new Error("Connexion SSH interrompue pendant la commande")));
+      const timer = setTimeout(
+        () =>
+          finish(() => {
+            client.end();
+            client.destroy();
+            reject(
+              new Error(
+                `Commande interrompue après ${Math.round(timeoutMs / 1000)} s sans réponse du serveur`,
+              ),
+            );
+          }),
+        timeoutMs,
+      );
+      client.on("close", onClientClose);
+
       client.exec(command, (err, stream: ClientChannel) => {
-        if (err) return reject(err);
+        if (err) return finish(() => reject(err));
         let stdout = "";
         let stderr = "";
-        stream.on("data", (d: Buffer) => (stdout += d.toString()));
-        stream.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
-        stream.on("close", (code: number | null) => resolve({ code: code ?? -1, stdout, stderr }));
-        stream.on("error", reject);
+        stream.on("data", (d: Buffer) => {
+          if (stdout.length < MAX_OUTPUT) stdout += d.toString();
+        });
+        stream.stderr.on("data", (d: Buffer) => {
+          if (stderr.length < MAX_OUTPUT) stderr += d.toString();
+        });
+        stream.on("close", (code: number | null) =>
+          finish(() => resolve({ code: code ?? -1, stdout, stderr })),
+        );
+        stream.on("error", (e: Error) => finish(() => reject(e)));
         if (stdin) {
-          stdin.on("error", reject);
+          stdin.on("error", (e: Error) =>
+            finish(() => {
+              stream.close();
+              reject(e);
+            }),
+          );
           stdin.pipe(stream);
         }
       });
@@ -129,12 +228,10 @@ export class SshServerAgent implements ServerAgent {
     command: string,
     what: string,
     stdin?: NodeJS.ReadableStream,
+    timeoutMs?: number,
   ): Promise<ExecResult> {
-    const res = await this.run(client, command, stdin);
-    if (res.code !== 0)
-      throw new Error(
-        `${what} : ${(res.stderr || res.stdout).trim().slice(0, MAX_LOG) || `code ${res.code}`}`,
-      );
+    const res = await this.run(client, command, stdin, timeoutMs);
+    if (res.code !== 0) throw new Error(`${what} : ${trimOutput(res)}`);
     return res;
   }
 
@@ -144,7 +241,7 @@ export class SshServerAgent implements ServerAgent {
     while (Date.now() < deadline) {
       try {
         const res = await this.withConnection(server, (c) =>
-          this.run(c, `test -f ${READY_MARKER} && caddy version`),
+          this.run(c, `test -f ${READY_MARKER} && caddy version`, undefined, 60_000),
         );
         if (res.code === 0) return;
         lastError = `installation en cours (${READY_MARKER} absent)`;
@@ -173,18 +270,46 @@ export class SshServerAgent implements ServerAgent {
     releaseDir: string,
     releaseName: string,
   ): Promise<void> {
-    const target = `${SITES_ROOT}/${assertSlug(slug)}/releases/${assertReleaseName(releaseName)}`;
-    const archive = Readable.from(
-      tar.create({ gzip: true, cwd: releaseDir, portable: true }, ["."]),
-    );
-    await this.withConnection(server, (c) =>
-      this.must(
+    const releasesDir = `${SITES_ROOT}/${assertSlug(slug)}/releases`;
+    const name = assertReleaseName(releaseName);
+    await this.withConnection(server, async (c) => {
+      // Immutable: nothing to send when the release is already complete.
+      const present = await this.run(c, hasReleaseScript({ releasesDir, name }));
+      if (present.code === 0) return;
+      const archive = Readable.from(
+        tar.create({ gzip: true, cwd: releaseDir, portable: true }, ["."]),
+      );
+      await this.must(
         c,
-        `rm -rf ${shellQuote(target)} && mkdir -p ${shellQuote(target)} && tar xzf - -C ${shellQuote(target)}`,
+        `mkdir -p ${shellQuote(releasesDir)} && ${uploadReleaseScript({ releasesDir, name })}`,
         "Envoi de la release",
         archive,
-      ),
+        this.uploadTimeoutMs,
+      );
+    });
+  }
+
+  async hasRelease(server: ServerRef, slug: string, releaseName: string): Promise<boolean> {
+    const releasesDir = `${SITES_ROOT}/${assertSlug(slug)}/releases`;
+    const name = assertReleaseName(releaseName);
+    const res = await this.withConnection(server, (c) =>
+      this.run(c, hasReleaseScript({ releasesDir, name })),
     );
+    if (res.code === 0) return true;
+    if (res.code === 1) return false;
+    throw new Error(`Vérification de la release : ${trimOutput(res)}`);
+  }
+
+  async pruneReleases(server: ServerRef, slug: string, keep: string[]): Promise<string[]> {
+    const siteDir = `${SITES_ROOT}/${assertSlug(slug)}`;
+    const script = pruneReleasesScript({ siteDir, keep: keep.map(assertReleaseName) });
+    const res = await this.withConnection(server, (c) =>
+      this.must(c, script, "Purge des anciennes releases"),
+    );
+    return res.stdout
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("rel-"));
   }
 
   async switchRelease(server: ServerRef, slug: string, releaseName: string): Promise<void> {
@@ -200,37 +325,33 @@ export class SshServerAgent implements ServerAgent {
   }
 
   async writeCaddySite(server: ServerRef, slug: string, config: string): Promise<void> {
-    const file = `${CADDY_SITES}/${assertSlug(slug)}.caddy`;
-    await this.withConnection(server, async (c) => {
-      await this.must(
+    const name = assertSlug(slug);
+    const sha256 = createHash("sha256").update(config, "utf8").digest("hex");
+    const res = await this.withConnection(server, (c) =>
+      this.run(
         c,
-        `cat > ${shellQuote(file)}`,
-        "Écriture de la configuration Caddy",
+        writeCaddySiteScript(DEFAULT_CADDY_PATHS, { name, sha256 }),
         stringStream(config),
-      );
-      const check = await this.run(
-        c,
-        "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1",
-      );
-      if (check.code !== 0) {
-        await this.run(c, `rm -f ${shellQuote(file)}`);
-        throw new Error(
-          `Configuration Caddy refusée : ${(check.stdout || check.stderr).trim().slice(0, MAX_LOG)}`,
-        );
-      }
-    });
+      ),
+    );
+    if (res.code === 3) throw new Error(`Configuration Caddy refusée : ${trimOutput(res)}`);
+    if (res.code !== 0) throw new Error(`Écriture de la configuration Caddy : ${trimOutput(res)}`);
   }
 
   async removeCaddySite(server: ServerRef, slug: string): Promise<void> {
-    const file = `${CADDY_SITES}/${assertSlug(slug)}.caddy`;
+    const name = assertSlug(slug);
     await this.withConnection(server, (c) =>
-      this.must(c, `rm -f ${shellQuote(file)}`, "Suppression de la configuration Caddy"),
+      this.must(
+        c,
+        removeCaddySiteScript(DEFAULT_CADDY_PATHS, { name }),
+        "Suppression de la configuration Caddy",
+      ),
     );
   }
 
   async reloadCaddy(server: ServerRef): Promise<void> {
     await this.withConnection(server, (c) =>
-      this.must(c, "sudo -n /usr/bin/systemctl reload caddy", "Rechargement de Caddy"),
+      this.must(c, reloadCaddyScript(DEFAULT_CADDY_PATHS, RELOAD_COMMAND), "Rechargement de Caddy"),
     );
   }
 

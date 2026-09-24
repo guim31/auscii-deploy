@@ -24,6 +24,15 @@ export function requiredBytes(zipBytes: number, thresholds: CapacityThresholds):
   return zipBytes * 3 + thresholds.reserveBytes;
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  ordering: "en cours de commande",
+  bootstrapping: "en cours d'installation",
+  error: "en erreur",
+  retiring: "en cours de suppression",
+  retired: "supprimé",
+  unreachable: "injoignable",
+};
+
 /** Evaluates one server against the thresholds. Pure, unit-tested. */
 export function evaluateServer(
   server: CandidateServer,
@@ -35,7 +44,7 @@ export function evaluateServer(
     return {
       serverId: server.id,
       level: "unavailable",
-      reasons: [`Serveur ${server.status}`],
+      reasons: [`Serveur ${STATUS_LABEL[server.status] ?? server.status}`],
       usagePct: 0,
     };
   }

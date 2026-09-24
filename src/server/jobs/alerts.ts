@@ -3,7 +3,8 @@ import { prisma } from "../db";
 import { enqueue, QUEUES } from "./boss";
 import type { MailSendPayload } from "./mail";
 
-export type AlertKind = "domain_expiry" | "tls_failure" | "deployment_failed";
+export type AlertKind =
+  "domain_expiry" | "tls_failure" | "deployment_failed" | "server_unreachable";
 
 export type AlertInput = {
   kind: AlertKind;
@@ -19,9 +20,16 @@ export function daysUntil(date: Date, now = new Date()): number {
   return Math.floor((date.getTime() - now.getTime()) / 86_400_000);
 }
 
-/** UTC midnight of the given instant, used as the deduplication day. */
+const PARIS_DAY = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Paris",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/** Calendar day in Paris of the given instant (as a UTC midnight date), used as the deduplication day. */
 export function alertDay(now = new Date()): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return new Date(`${PARIS_DAY.format(now)}T00:00:00.000Z`);
 }
 
 /**
@@ -43,9 +51,13 @@ export async function raiseAlert(
         isDemo: input.isDemo ?? false,
       },
     });
-    await enqueue(QUEUES.mailSend, { kind: "alert", alertId: alert.id } satisfies MailSendPayload, {
-      singletonKey: `alert:${alert.id}`,
-    });
+    // A failed enqueue is caught up by the hourly resendPendingAlerts().
+    await enqueue(QUEUES.mailSend, {
+      kind: "alert",
+      alertId: alert.id,
+    } satisfies MailSendPayload).catch((err) =>
+      console.error("[alerts] mise en file impossible", err instanceof Error ? err.message : err),
+    );
     return { id: alert.id, created: true };
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
