@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { PlusIcon, ArrowRightIcon } from "lucide-react";
+import { PlusIcon, ArrowRightIcon, AlertTriangleIcon } from "lucide-react";
 import { requireUser } from "@/server/session";
 import { getSettings } from "@/server/settings";
-import { listDashboardSites } from "@/server/sites";
+import { listDashboardSites, listDrafts } from "@/server/sites";
 import { listCandidates } from "@/server/jobs/steps/server";
 import { evaluateServer } from "@/server/capacity";
 import { seedDemo } from "@/server/demo/seed";
@@ -12,6 +12,8 @@ import { SiteCard, type SiteCardData } from "@/components/sites/site-card";
 import { ServersBanner } from "@/components/sites/servers-banner";
 import { SiteStatusBadge } from "@/components/app/status-badge";
 import { relativeTime } from "@/lib/format";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { DeleteDraftButton } from "@/components/sites/delete-draft-button";
 
 export const dynamic = "force-dynamic";
 
@@ -23,13 +25,19 @@ const RESUME_STEP: Record<string, string> = {
   preview: "step-4",
 };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ forbidden?: string }>;
+}) {
   await requireUser();
+  const { forbidden } = await searchParams;
   const settings = await getSettings();
   if (settings.demoMode) await seedDemo();
-  const [sites, candidates] = await Promise.all([
+  const [sites, candidates, drafts] = await Promise.all([
     listDashboardSites(settings.demoMode),
     listCandidates(settings.demoMode),
+    listDrafts(settings.demoMode),
   ]);
   const live = sites.filter((s) => s.status === "live");
   const inProgress = sites.filter((s) => s.status !== "live");
@@ -82,7 +90,41 @@ export default async function DashboardPage() {
           </Button>
         }
       />
+      {forbidden && (
+        <Alert variant="warning" className="mb-6">
+          <AlertTriangleIcon />
+          <AlertTitle>Accès réservé</AlertTitle>
+          <AlertDescription>
+            Cette page est réservée aux administrateurs de l'agence.
+          </AlertDescription>
+        </Alert>
+      )}
       <ServersBanner servers={servers} />
+
+      {drafts.length > 0 && (
+        <section className="mb-8">
+          <h2 className="text-muted-foreground mb-3 text-sm font-medium">Brouillons</h2>
+          <div className="bg-card divide-y rounded-lg border">
+            {drafts.map((d) => (
+              <div key={d.id} className="flex items-center gap-4 px-4 py-3 text-sm">
+                <SiteStatusBadge status="draft" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">{d.clientName}</div>
+                  <div className="text-muted-foreground text-xs">
+                    commencé {relativeTime(d.createdAt)}
+                  </div>
+                </div>
+                <DeleteDraftButton siteId={d.id} name={d.clientName} />
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/deploy/${d.id}/step-1`}>
+                    Reprendre <ArrowRightIcon />
+                  </Link>
+                </Button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {inProgress.length > 0 && (
         <section className="mb-8">

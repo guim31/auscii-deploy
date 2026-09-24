@@ -17,7 +17,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { createUserAction, deleteUserAction, setUserRoleAction } from "@/server/actions/settings";
+import {
+  createUserAction,
+  deleteUserAction,
+  resetUserPasswordAction,
+  setUserRoleAction,
+} from "@/server/actions/settings";
 import { formatDate } from "@/lib/format";
 
 type Row = { id: string; name: string; email: string; role: string; createdAt: string };
@@ -41,6 +46,17 @@ export function UsersTable({ users, meId }: { users: Row[]; meId: string }) {
       const res = await setUserRoleAction(id, role);
       if (!res.ok) toast.error(res.error);
       router.refresh();
+    });
+  }
+  function resetPassword(id: string, email: string) {
+    const password = window.prompt(
+      `Nouveau mot de passe pour ${email} (12 caractères minimum). Ses sessions ouvertes seront fermées.`,
+    );
+    if (!password) return;
+    startTransition(async () => {
+      const res = await resetUserPasswordAction(id, password);
+      if (!res.ok) toast.error(res.error);
+      else toast.success("Mot de passe modifié : transmettez-le à la personne");
     });
   }
   function remove(id: string, email: string) {
@@ -87,6 +103,16 @@ export function UsersTable({ users, meId }: { users: Row[]; meId: string }) {
                   <TableCell className="text-right">
                     {u.id !== meId && (
                       <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => resetPassword(u.id, u.email)}
+                        disabled={pending}
+                      >
+                        Nouveau mot de passe
+                      </Button>
+                    )}
+                    {u.id !== meId && (
+                      <Button
                         size="icon"
                         variant="ghost"
                         onClick={() => remove(u.id, u.email)}
@@ -126,7 +152,7 @@ export function UsersTable({ users, meId }: { users: Row[]; meId: string }) {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-password">Mot de passe (8 caractères min.)</Label>
+            <Label htmlFor="new-password">Mot de passe (12 caractères min.)</Label>
             <Input
               id="new-password"
               type="password"
@@ -147,7 +173,7 @@ export function UsersTable({ users, meId }: { users: Row[]; meId: string }) {
             </NativeSelect>
           </div>
           <div className="flex justify-end sm:col-span-2">
-            <Button onClick={create} disabled={pending || !form.email || form.password.length < 8}>
+            <Button onClick={create} disabled={pending || !form.email || form.password.length < 12}>
               {pending ? <Loader2Icon className="animate-spin" /> : <PlusIcon />} Créer le compte
             </Button>
           </div>

@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/session";
+import { matchesCurrentMode } from "@/server/mode";
 import { ProvisionView } from "@/components/wizard/provision-view";
 import type { ConsoleLog, ConsoleState } from "@/components/wizard/deploy-console";
 import type { StepState } from "@/server/jobs/pipeline";
@@ -8,10 +9,10 @@ import type { StepState } from "@/server/jobs/pipeline";
 export const dynamic = "force-dynamic";
 
 export default async function Step2Page({ params }: { params: Promise<{ siteId: string }> }) {
-  await requireUser();
+  const user = await requireUser();
   const { siteId } = await params;
   const site = await prisma.site.findUnique({ where: { id: siteId } });
-  if (!site) notFound();
+  if (!site || !(await matchesCurrentMode(site))) notFound();
   const deployment = await prisma.deployment.findFirst({
     where: { siteId, kind: "provision" },
     orderBy: { createdAt: "desc" },
@@ -33,10 +34,12 @@ export default async function Step2Page({ params }: { params: Promise<{ siteId: 
   }));
   return (
     <ProvisionView
+      key={`${deployment.status}:${deployment.error ?? ""}`}
       siteId={siteId}
       deploymentId={deployment.id}
       initialState={state}
       initialLogs={logs}
+      isAdmin={user.role === "admin"}
     />
   );
 }

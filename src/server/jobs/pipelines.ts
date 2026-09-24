@@ -24,16 +24,13 @@ import { pickServer } from "../capacity";
 import { ProviderNotConfiguredError } from "../providers/types";
 import { describeRecords, expectedDnsRecords } from "../deploy/dns";
 import { releaseDir } from "../releases/paths";
+import { SERVER_ORDER_CONFIRMATION_REQUIRED } from "@/lib/messages";
 
 export type ProvisionPayload = {
   deploymentId: string;
   zipBytes?: number;
 };
 export type DeployPayload = { deploymentId: string };
-
-/** Message of the server step when a paid order needs an admin: the UI offers the confirmation. */
-export const SERVER_ORDER_CONFIRMATION_REQUIRED =
-  "Aucun serveur n'a de place disponible. Un administrateur doit confirmer la commande d'un nouveau serveur.";
 
 /** Another deployment of the site is queued or running. */
 export class DeploymentBusyError extends Error {

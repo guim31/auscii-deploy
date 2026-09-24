@@ -13,6 +13,7 @@ import type { SendingDomainStatus } from "../providers/mail/resend";
 import { resetDemo, seedDemo } from "../demo/seed";
 import { collectAllMetrics } from "../jobs/maintenance";
 import { createUserWithPassword } from "../users";
+import { PASSWORD_MIN_LENGTH } from "../auth";
 import { mergeIntegrationFields } from "../integrations";
 import { matchesCurrentMode, OTHER_MODE_ERROR } from "../mode";
 import { isValidFqdn } from "@/lib/slug";
@@ -473,7 +474,7 @@ export async function deleteServerAction(serverId: string, confirmName: string):
   return { ok: true };
 }
 
-const PASSWORD_MIN = 12;
+const PASSWORD_MIN = PASSWORD_MIN_LENGTH;
 
 const userSchema = z.object({
   name: z.string().trim().min(1, "Nom requis").max(80),
@@ -528,6 +529,33 @@ export async function deleteUserAction(userId: string): Promise<Result> {
   await prisma.user.delete({ where: { id: userId } });
   await audit(user, "user.delete", { target: userId });
   revalidatePath("/settings/users");
+  return { ok: true };
+}
+
+/** Admin: sets a new password for another account and closes its sessions. */
+export async function resetUserPasswordAction(userId: string, password: string): Promise<Result> {
+  const user = await admin();
+  if (!user) return { ok: false, error: "Réservé aux administrateurs" };
+  if (typeof userId !== "string" || typeof password !== "string")
+    return { ok: false, error: "Compte introuvable" };
+  if (userId === user.id)
+    return { ok: false, error: "Changez votre propre mot de passe depuis « Mon compte »." };
+  if (password.length < PASSWORD_MIN || password.length > 128)
+    return { ok: false, error: `Mot de passe : ${PASSWORD_MIN} caractères minimum` };
+  const account = await prisma.account.findFirst({
+    where: { userId, providerId: "credential" },
+    include: { user: { select: { email: true } } },
+  });
+  if (!account) return { ok: false, error: "Compte introuvable" };
+  const { hashPassword } = await import("better-auth/crypto");
+  await prisma.$transaction([
+    prisma.account.update({
+      where: { id: account.id },
+      data: { password: await hashPassword(password) },
+    }),
+    prisma.session.deleteMany({ where: { userId } }),
+  ]);
+  await audit(user, "user.resetPassword", { target: account.user.email });
   return { ok: true };
 }
 

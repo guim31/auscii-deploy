@@ -34,6 +34,7 @@ export type ServerRow = {
   id: string;
   name: string;
   status: string;
+  lastError: string | null;
   provider: string;
   ip: string | null;
   offer: string;
@@ -55,6 +56,7 @@ const STATUS: Record<
   error: { label: "Erreur", variant: "destructive" },
   retiring: { label: "Suppression", variant: "warning" },
   retired: { label: "Retiré", variant: "outline" },
+  unreachable: { label: "Injoignable", variant: "destructive" },
 };
 
 function Gauge({ label, pct, max }: { label: string; pct: number; max: number }) {
@@ -182,12 +184,9 @@ export function ServersTable({
                     {m
                       ? `${formatBytes(m.diskFreeBytes)} libres · relevé ${relativeTime(m.collectedAt)}`
                       : ""}
-                    {s.status === "error" &&
-                      (m as unknown as { lastError?: string } | null)?.lastError && (
-                        <span className="text-destructive ml-2">
-                          {(m as unknown as { lastError?: string }).lastError}
-                        </span>
-                      )}
+                    {(s.status === "error" || s.status === "unreachable") && s.lastError && (
+                      <span className="text-destructive ml-2">{s.lastError}</span>
+                    )}
                     {s.verdict.reasons.length > 0 && (
                       <span className="text-destructive ml-2">{s.verdict.reasons[0]}</span>
                     )}
@@ -216,8 +215,7 @@ export function ServersTable({
                     </span>
                   )}
                   {isAdmin &&
-                    s.status !== "retired" &&
-                    s.status !== "retiring" &&
+                    (s.status === "ready" || s.status === "error" || s.status === "unreachable") &&
                     s.sitesCount === 0 && (
                       <DeleteServerDialog
                         server={{

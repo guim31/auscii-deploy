@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 const STEPS = [
   { n: 1, label: "Domaine" },
-  { n: 2, label: "Provisioning" },
+  { n: 2, label: "Hébergement" },
   { n: 3, label: "Site" },
   { n: 4, label: "Mise en ligne" },
 ];
@@ -48,7 +48,11 @@ export function Stepper({ siteId, reachable }: { siteId: string; reachable: numb
           </span>
         );
         return (
-          <li key={step.n} className="flex items-center gap-2">
+          <li
+            key={step.n}
+            className="flex items-center gap-2"
+            aria-current={active ? "step" : undefined}
+          >
             {canGo && !active ? (
               <Link href={`/deploy/${siteId}/step-${step.n}`}>{inner}</Link>
             ) : (

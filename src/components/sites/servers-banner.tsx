@@ -11,6 +11,15 @@ export type ServerSummary = {
   verdict: CapacityVerdict;
 };
 
+const STATUS_LABEL: Record<string, string> = {
+  ordering: "commande en cours",
+  bootstrapping: "installation",
+  error: "en erreur",
+  retiring: "suppression",
+  retired: "retiré",
+  unreachable: "injoignable",
+};
+
 export function ServersBanner({ servers }: { servers: ServerSummary[] }) {
   if (servers.length === 0) {
     return (
@@ -24,12 +33,17 @@ export function ServersBanner({ servers }: { servers: ServerSummary[] }) {
   return (
     <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {servers.map((s) => {
+        const ready = s.status === "ready";
         const tone =
-          s.verdict.level === "full"
+          !ready && (s.status === "error" || s.status === "unreachable")
             ? "destructive"
-            : s.verdict.level === "warn"
+            : !ready
               ? "warning"
-              : "success";
+              : s.verdict.level === "full"
+                ? "destructive"
+                : s.verdict.level === "warn"
+                  ? "warning"
+                  : "success";
         return (
           <Link
             key={s.id}
@@ -41,23 +55,27 @@ export function ServersBanner({ servers }: { servers: ServerSummary[] }) {
                 <ServerIcon className="text-muted-foreground size-4" /> {s.name}
               </span>
               <span className="text-muted-foreground text-xs">
-                {s.status === "ready"
+                {ready
                   ? `${s.sitesCount} site${s.sitesCount > 1 ? "s" : ""}`
-                  : s.status === "retired"
-                    ? "retiré"
-                    : "préparation"}
+                  : (STATUS_LABEL[s.status] ?? s.status)}
               </span>
             </div>
-            <Progress value={s.verdict.usagePct} tone={tone} className="mt-2" />
+            <Progress value={ready ? s.verdict.usagePct : 0} tone={tone} className="mt-2" />
             <div className="text-muted-foreground mt-1 flex items-center gap-1 text-xs">
-              {s.verdict.level === "full" && (
+              {(s.verdict.level === "full" || tone === "destructive") && (
                 <AlertTriangleIcon className="text-destructive size-3" />
               )}
-              {s.verdict.level === "full"
-                ? "Capacité atteinte"
-                : s.verdict.level === "warn"
-                  ? "Charge élevée"
-                  : `Charge ${s.verdict.usagePct} %`}
+              {!ready
+                ? s.status === "unreachable"
+                  ? "Ne répond plus : voir Paramètres > Serveurs"
+                  : s.status === "error"
+                    ? "Voir Paramètres > Serveurs"
+                    : "Pas encore disponible"
+                : s.verdict.level === "full"
+                  ? "Capacité atteinte"
+                  : s.verdict.level === "warn"
+                    ? "Charge élevée"
+                    : `Charge ${s.verdict.usagePct} %`}
             </div>
           </Link>
         );
