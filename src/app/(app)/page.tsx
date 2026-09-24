@@ -3,6 +3,7 @@ import { PlusIcon, ArrowRightIcon, AlertTriangleIcon } from "lucide-react";
 import { requireUser } from "@/server/session";
 import { getSettings } from "@/server/settings";
 import { listDashboardSites, listDrafts } from "@/server/sites";
+import { previewUrl } from "@/server/releases/preview-url";
 import { listCandidates } from "@/server/jobs/steps/server";
 import { evaluateServer } from "@/server/capacity";
 import { seedDemo } from "@/server/demo/seed";
@@ -70,6 +71,10 @@ export default async function DashboardPage({
     domainAutorenew: s.domainRecord?.autorenew ?? false,
     liveReleaseId: s.liveReleaseId,
     stagingReleaseId: s.stagingReleaseId,
+    previewUrl:
+      (s.liveReleaseId ?? s.stagingReleaseId)
+        ? previewUrl((s.liveReleaseId ?? s.stagingReleaseId)!)
+        : null,
     demo: s.isDemo,
   }));
 

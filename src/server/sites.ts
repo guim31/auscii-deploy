@@ -137,7 +137,10 @@ export async function ingestUpload(siteId: string, zipPath: string, userId: stri
   const dir = releaseDir(release.id);
   try {
     const extracted = await extractSiteZip(zipPath, dir);
-    const analysis = await analyzeSite(dir, extracted.files);
+    const analysis = await analyzeSite(dir, extracted.files, {
+      intake: extracted,
+      formsEmail: site.formsEmail,
+    });
     const updated = await prisma.release.update({
       where: { id: release.id },
       data: {

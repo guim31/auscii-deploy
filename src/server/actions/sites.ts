@@ -22,8 +22,8 @@ import {
   startStagingDeploy,
 } from "../jobs/pipelines";
 import type { AiReport } from "../providers/types";
-import { analyzeSite, type Analysis } from "../releases/analyze";
-import { fixForms, listSiteFiles } from "../releases/fix-forms";
+import { analysisForClient, type Analysis } from "../releases/analyze";
+import { FixFormsRefusedError, fixReleaseForms } from "../releases/fix-release";
 import { releaseDir } from "../releases/paths";
 import { queueSubmissionMail } from "../jobs/mail";
 import { enqueue, QUEUES } from "../jobs/boss";
@@ -397,32 +397,17 @@ export async function fixFormsAction(
   if (!user) return { ok: false, error: "Non authentifié" };
   const release = await prisma.release.findUnique({
     where: { id: String(releaseId) },
-    include: {
-      site: { select: { id: true, isDemo: true } },
-      _count: { select: { deployments: true } },
-    },
+    select: { id: true, site: { select: { id: true, isDemo: true } } },
   });
   if (!release) return { ok: false, error: "Version introuvable" };
   if (!(await matchesCurrentMode(release.site))) return { ok: false, error: OTHER_MODE_ERROR };
-  // A version already sent to GitHub or to a server is frozen: GitHub, the
-  // servers and the pilot must keep the same files.
-  if (release.commitSha || release._count.deployments > 0)
-    return {
-      ok: false,
-      error: "Cette version a déjà été déployée : déposez une nouvelle archive.",
-    };
   try {
-    const dir = releaseDir(release.id);
-    const files = await listSiteFiles(dir);
-    const { fixed } = await fixForms(dir, files);
-    const analysis = await analyzeSite(dir, files);
-    await prisma.release.update({
-      where: { id: release.id },
-      data: { analysis: analysis as object, fileCount: files.length },
-    });
+    // Refuses a version already pushed or deployed: GitHub, servers and pilot keep the same files.
+    const { fixed, analysis } = await fixReleaseForms(release.id);
     revalidatePath(`/deploy/${release.site.id}/step-3`);
-    return { ok: true, fixed, analysis };
+    return { ok: true, fixed, analysis: analysisForClient(analysis) };
   } catch (err) {
+    if (err instanceof FixFormsRefusedError) return { ok: false, error: err.message };
     return { ok: false, error: errorMessage(err) };
   }
 }
