@@ -29,6 +29,12 @@ export class MockCloudProvider implements CloudProvider {
     await sleep(1500);
     if (!MOCK_OFFERS.some((o) => o.id === input.offer))
       throw new Error(`Offre inconnue : ${input.offer}`);
+    // Like the real provider, an interrupted order under the same name is resumed.
+    const existing = await this.findServerByName(input.name, input.zone);
+    if (existing) {
+      await hooks?.onCreated?.({ ...existing });
+      return existing;
+    }
     const providerId = `mock-srv-${hashInt(input.name, 1_000_000)}`;
     const server: CloudServer & { createdAt: number } = {
       providerId,

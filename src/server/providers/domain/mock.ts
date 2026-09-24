@@ -88,7 +88,7 @@ export class MockDomainProvider implements DomainProvider {
     if (!owned.has(name)) return null;
     const expiresAt = new Date();
     expiresAt.setFullYear(expiresAt.getFullYear() + 1);
-    return { fqdn: name, status: "active", expiresAt, usesProviderDns: true };
+    return { fqdn: name, status: "active", expiresAt, usesProviderDns: true, autorenew: true };
   }
 
   async listOwned(): Promise<string[]> {

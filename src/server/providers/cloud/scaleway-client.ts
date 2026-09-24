@@ -1,8 +1,21 @@
 /** Minimal client for the Scaleway API. The secret key never appears in logs or messages. */
 
+import {
+  cleanSecret,
+  fetchWithRetry,
+  hasForbiddenHeaderChars,
+  invalidSecretMessage,
+  NetworkError,
+  networkErrorReason,
+  readBody,
+  sanitizeMessage,
+  type FetchLike,
+  type RetryOptions,
+} from "../http-utils";
+
 export const SCALEWAY_API = "https://api.scaleway.com";
 
-export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type { FetchLike };
 
 export class ScalewayError extends Error {
   constructor(
@@ -13,26 +26,85 @@ export class ScalewayError extends Error {
     super(message);
     this.name = "ScalewayError";
   }
+
+  /** Scaleway error type (`quotas_exceeded`, `out_of_stock`, `not_found`…), when given. */
+  get type(): string | undefined {
+    const d = this.details;
+    return d && typeof d === "object" && "type" in d
+      ? String((d as { type: unknown }).type)
+      : undefined;
+  }
 }
 
 type ErrorBody = {
   message?: string;
   type?: string;
   resource?: string;
+  resource_id?: string;
+  current_state?: string;
   fields?: Record<string, string[]>;
+  details?: {
+    argument_name?: string;
+    reason?: string;
+    help_message?: string;
+    resource?: string;
+    quota?: number;
+    current?: number;
+  }[];
 };
 
+const PERMISSIONS_HINT =
+  "Attribuez-lui InstancesFullAccess et BlockStorageFullAccess sur le projet (Paramètres > Intégrations).";
+
+/**
+ * Translates a Scaleway error. The error `type` is tested before the HTTP
+ * status: quotas, for instance, arrive as 403 and are not a permission issue
+ * (types from scaleway-sdk-go scw/errors.go).
+ */
 export function describeScalewayError(
   status: number,
   body: ErrorBody | null,
   fallback: string,
 ): string {
   const message = body?.message ?? fallback;
+  switch (body?.type) {
+    case "quotas_exceeded": {
+      const quotas = body.details
+        ?.filter((d) => d.resource)
+        .map((d) => `${d.resource} ${d.current ?? "?"}/${d.quota ?? "?"}`)
+        .join(", ");
+      return `Quota Scaleway atteint${quotas ? ` (${quotas})` : ""} : ${message}. Demandez une augmentation dans la console Scaleway (Organisation > Quotas).`;
+    }
+    case "out_of_stock":
+      return `Offre indisponible dans cette zone pour le moment (rupture de stock chez Scaleway) : ${message}.`;
+    case "permissions_denied":
+      return `La clé API Scaleway n'a pas les permissions nécessaires (${message}). ${PERMISSIONS_HINT}`;
+    case "denied_authentication":
+      return "Clé API Scaleway invalide ou expirée (Paramètres > Intégrations).";
+    case "precondition_failed":
+      return `Précondition refusée par Scaleway : ${message}.`;
+    case "transient_state":
+      return `Ressource Scaleway en cours de changement d'état${body.current_state ? ` (${body.current_state})` : ""}, réessayez dans une minute.`;
+    case "locked":
+      return `Ressource verrouillée par Scaleway : ${message}. Contactez le support Scaleway.`;
+    case "resource_expired":
+      return `Ressource Scaleway expirée : ${message}.`;
+    case "not_found":
+      return `Ressource introuvable chez Scaleway : ${message}.`;
+    case "invalid_arguments": {
+      const details = body.details
+        ?.map((d) => [d.argument_name, d.help_message ?? d.reason].filter(Boolean).join(" : "))
+        .filter(Boolean)
+        .join(" ; ");
+      if (details) return `Scaleway a refusé la demande : ${details}.`;
+      break;
+    }
+  }
   switch (status) {
     case 401:
       return "Clé API Scaleway invalide (Paramètres > Intégrations).";
     case 403:
-      return `La clé API Scaleway n'a pas les permissions nécessaires (${message}). Attribuez-lui InstancesFullAccess sur le projet.`;
+      return `La clé API Scaleway n'a pas les permissions nécessaires (${message}). ${PERMISSIONS_HINT}`;
     case 404:
       return `Ressource introuvable chez Scaleway : ${message}.`;
     case 409:
@@ -42,10 +114,6 @@ export function describeScalewayError(
     case 429:
       return "Trop de requêtes vers Scaleway, réessayez dans une minute.";
     default:
-      if (body?.type === "quotas_exceeded")
-        return `Quota Scaleway atteint : ${message}. Demandez une augmentation dans la console.`;
-      if (body?.type === "out_of_stock")
-        return `Offre indisponible dans cette zone pour le moment : ${message}.`;
       if (body?.fields) {
         const fields = Object.entries(body.fields)
           .map(([k, v]) => `${k} : ${v.join(", ")}`)
@@ -57,65 +125,63 @@ export function describeScalewayError(
 }
 
 export class ScalewayClient {
+  private readonly secretKey: string;
+
   constructor(
-    private readonly secretKey: string,
+    secretKey: string,
     private readonly fetchImpl: FetchLike = (input, init) => fetch(input, init),
     private readonly timeoutMs = 20_000,
-  ) {}
+    private readonly retry: RetryOptions = {},
+  ) {
+    this.secretKey = cleanSecret(secretKey);
+  }
 
+  /** Performs a request and parses JSON. GETs are retried on 429/5xx. */
   async request<T>(
     method: string,
     path: string,
     opts: { body?: unknown; rawBody?: string; contentType?: string; expect?: number[] } = {},
   ): Promise<{ status: number; data: T; headers: Headers }> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    if (hasForbiddenHeaderChars(this.secretKey))
+      throw new ScalewayError(invalidSecretMessage("La clé API Scaleway"), 0);
     let res: Response;
     try {
-      res = await this.fetchImpl(SCALEWAY_API + path, {
-        method,
-        headers: {
-          "X-Auth-Token": this.secretKey,
-          Accept: "application/json",
-          ...(opts.rawBody !== undefined
-            ? { "Content-Type": opts.contentType ?? "text/plain" }
-            : opts.body !== undefined
-              ? { "Content-Type": "application/json" }
-              : {}),
+      res = await fetchWithRetry(
+        this.fetchImpl,
+        SCALEWAY_API + path,
+        {
+          method,
+          headers: {
+            "X-Auth-Token": this.secretKey,
+            Accept: "application/json",
+            ...(opts.rawBody !== undefined
+              ? { "Content-Type": opts.contentType ?? "text/plain" }
+              : opts.body !== undefined
+                ? { "Content-Type": "application/json" }
+                : {}),
+          },
+          body:
+            opts.rawBody !== undefined
+              ? opts.rawBody
+              : opts.body !== undefined
+                ? JSON.stringify(opts.body)
+                : undefined,
         },
-        body:
-          opts.rawBody !== undefined
-            ? opts.rawBody
-            : opts.body !== undefined
-              ? JSON.stringify(opts.body)
-              : undefined,
-        signal: controller.signal,
-      });
+        { timeoutMs: this.timeoutMs, secrets: [this.secretKey], ...this.retry },
+      );
     } catch (err) {
       const reason =
-        err instanceof Error && err.name === "AbortError"
-          ? "délai dépassé"
-          : err instanceof Error
-            ? err.message
-            : String(err);
+        err instanceof NetworkError ? err.reason : networkErrorReason(err, [this.secretKey]);
       throw new ScalewayError(`Scaleway injoignable (${reason}).`, 0);
-    } finally {
-      clearTimeout(timer);
     }
-    const text = await res.text();
-    let data: unknown = null;
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
-    }
+    const data = await readBody(res);
     const accepted = opts.expect ?? [200, 201, 202, 204];
     if (!accepted.includes(res.status)) {
-      const body = typeof data === "object" ? (data as ErrorBody) : null;
+      const body = data && typeof data === "object" ? (data as ErrorBody) : null;
       throw new ScalewayError(
-        describeScalewayError(res.status, body, `${method} ${path}`),
+        sanitizeMessage(describeScalewayError(res.status, body, `${method} ${path}`), [
+          this.secretKey,
+        ]),
         res.status,
         data,
       );

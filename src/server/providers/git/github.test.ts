@@ -1,12 +1,12 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { generateKeyPairSync, createVerify } from "node:crypto";
 import { simpleGit } from "simple-git";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { appJwt, InstallationTokenSource } from "./github-app";
+import { appJwt, InstallationTokenSource, normalizePem } from "./github-app";
 import { describeGitHubError, GitHubClient, GitHubError } from "./github-client";
-import { GitHubProvider } from "./github";
+import { gitAuthConfig, gitAuthHeader, GitHubProvider, withRepoLock } from "./github";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const PEM = privateKey.export({ type: "pkcs1", format: "pem" }) as string;
@@ -150,13 +150,8 @@ describe("GitHubProvider", () => {
   });
 
   it("pushes releases on staging, promotes to production with a tag, and rolls back", async () => {
-    let stagingSha = "";
     const { p, calls } = provider({
       "POST https://api.github.com/repos/auscii/dupont/git/refs": () => ({ status: 201, body: {} }),
-      "GET https://api.github.com/repos/auscii/dupont/git/ref/heads/staging": () => ({
-        status: 200,
-        body: { object: { sha: stagingSha } },
-      }),
     });
     const r1 = await release("v1", { "index.html": "<h1>v1</h1>", "style.css": "body{}" });
     const first = await p.pushRelease({
@@ -166,7 +161,6 @@ describe("GitHubProvider", () => {
       message: "Release v1",
     });
     expect(first.commitSha).toMatch(/^[0-9a-f]{40}$/);
-    stagingSha = first.commitSha;
 
     const origin = simpleGit({ baseDir: bare });
     expect((await origin.raw(["rev-parse", "refs/heads/staging"])).trim()).toBe(first.commitSha);
@@ -199,12 +193,17 @@ describe("GitHubProvider", () => {
       message: "Release v2",
     });
     expect(second.commitSha).not.toBe(first.commitSha);
-    stagingSha = second.commitSha;
     expect((await origin.raw(["ls-tree", "--name-only", "staging"])).trim()).toBe("index.html");
     await p.promote({ repo: "auscii/dupont", tag: "prod-2" });
     expect((await origin.raw(["rev-parse", "refs/heads/production"])).trim()).toBe(
       second.commitSha,
     );
+    // The tag is put on the commit pushed to production, never on a re-read of staging.
+    expect(calls.filter((c) => c.url.endsWith("/git/refs")).at(-1)?.body).toEqual({
+      ref: "refs/tags/prod-2",
+      sha: second.commitSha,
+    });
+    expect(calls.some((c) => c.url.includes("/git/ref/heads/staging"))).toBe(false);
 
     // Rollback moves production backwards.
     const back = await p.promote({
@@ -215,9 +214,143 @@ describe("GitHubProvider", () => {
     expect(back.commitSha).toBe(first.commitSha);
     expect((await origin.raw(["rev-parse", "refs/heads/production"])).trim()).toBe(first.commitSha);
 
-    // The token never stays in the local git config.
+    // The token never reaches the local git config, in any form.
     const local = simpleGit({ baseDir: path.join(work, "work", "auscii__dupont") });
-    expect(await local.raw(["config", "--get", "remote.origin.url"])).not.toContain("ghs_test");
+    expect(await local.raw(["config", "--get", "remote.origin.url"])).toBe(`${bare}\n`);
+    const config = await readFile(
+      path.join(work, "work", "auscii__dupont", ".git", "config"),
+      "utf8",
+    );
+    expect(config).not.toContain("ghs_test");
+    expect(config).not.toContain(Buffer.from("x-access-token:ghs_test").toString("base64"));
+    expect(config).not.toMatch(/extraheader/i);
+  });
+
+  it("scrubs a token left in the working copy by an older version or a crash", async () => {
+    const dir = path.join(work, "work", "auscii__legacy");
+    await mkdir(dir, { recursive: true });
+    const legacy = simpleGit({ baseDir: dir });
+    await legacy.init();
+    await legacy.addRemote("origin", "https://x-access-token:ghs_old@github.com/auscii/legacy.git");
+    await legacy.addConfig("http.https://github.com/.extraheader", "AUTHORIZATION: basic b2xk");
+    await writeFile(
+      path.join(dir, ".git", "FETCH_HEAD"),
+      "abc\t\tbranch 'staging' of https://x-access-token:ghs_old@github.com/auscii/legacy\n",
+    );
+    const { p } = provider({});
+    await p.pushRelease({
+      repo: "auscii/legacy",
+      releaseDir: await release("legacy", { "index.html": "x" }),
+      branch: "staging",
+      message: "Release",
+    });
+    const config = await readFile(path.join(dir, ".git", "config"), "utf8");
+    expect(config).not.toContain("ghs_old");
+    expect(config).not.toMatch(/extraheader/i);
+    const fetchHead = await readFile(path.join(dir, ".git", "FETCH_HEAD"), "utf8").catch(() => "");
+    expect(fetchHead).not.toContain("ghs_old");
+  });
+
+  it("serialises concurrent operations on the same repository", async () => {
+    const { p } = provider({});
+    const [a, b] = await Promise.all([
+      p.pushRelease({
+        repo: "auscii/concurrent",
+        releaseDir: await release("c1", { "index.html": "one" }),
+        branch: "staging",
+        message: "one",
+      }),
+      p.pushRelease({
+        repo: "auscii/concurrent",
+        releaseDir: await release("c2", { "index.html": "two", "b.html": "b" }),
+        branch: "production",
+        message: "two",
+      }),
+    ]);
+    const origin = simpleGit({ baseDir: bare });
+    expect((await origin.raw(["rev-parse", "refs/heads/staging"])).trim()).toBe(a.commitSha);
+    expect((await origin.raw(["rev-parse", "refs/heads/production"])).trim()).toBe(b.commitSha);
+    expect((await origin.raw(["show", `${a.commitSha}:index.html`])).trim()).toBe("one");
+    expect((await origin.raw(["ls-tree", "--name-only", b.commitSha])).trim().split("\n")).toEqual([
+      "b.html",
+      "index.html",
+    ]);
+  });
+
+  it("uses the next tag name when the tag points elsewhere, and is idempotent on the same commit", async () => {
+    const existing: Record<string, string> = { "prod-9": "0".repeat(40) };
+    const { p } = provider({
+      "POST https://api.github.com/repos/auscii/tags/git/refs": (c) => {
+        const body = c.body as { ref: string; sha: string };
+        const name = body.ref.replace("refs/tags/", "");
+        if (existing[name])
+          return {
+            status: 422,
+            body: { message: "Reference already exists", errors: [] },
+          };
+        existing[name] = body.sha;
+        return { status: 201, body: {} };
+      },
+      "GET https://api.github.com/repos/auscii/tags/git/ref/tags/": (c) => ({
+        status: 200,
+        body: { object: { sha: existing[c.url.split("/").at(-1)!] } },
+      }),
+    });
+    const pushed = await p.pushRelease({
+      repo: "auscii/tags",
+      releaseDir: await release("t1", { "index.html": "t" }),
+      branch: "staging",
+      message: "t",
+    });
+    const first = await p.promote({ repo: "auscii/tags", tag: "prod-9" });
+    expect(first).toEqual({ commitSha: pushed.commitSha, tag: "prod-9-2" });
+    const again = await p.promote({ repo: "auscii/tags", tag: "prod-9" });
+    expect(again.tag).toBe("prod-9-2");
+    expect(existing["prod-9"]).toBe("0".repeat(40));
+  });
+
+  it("fails loudly when every tag name is taken by other commits", async () => {
+    const { p } = provider({
+      "POST https://api.github.com/repos/auscii/full/git/refs": () => ({
+        status: 422,
+        body: { message: "Reference already exists" },
+      }),
+      "GET https://api.github.com/repos/auscii/full/git/ref/tags/": () => ({
+        status: 200,
+        body: { object: { sha: "f".repeat(40) } },
+      }),
+    });
+    await p.pushRelease({
+      repo: "auscii/full",
+      releaseDir: await release("f1", { "index.html": "f" }),
+      branch: "staging",
+      message: "f",
+    });
+    await expect(p.promote({ repo: "auscii/full", tag: "prod-1" })).rejects.toThrow(
+      /Impossible de poser le tag prod-1/,
+    );
+  });
+
+  it("reports git failures without the token", async () => {
+    const { impl } = fakeFetch(TOKEN_ROUTE);
+    const p = new GitHubProvider(CREDS, {
+      fetchImpl: impl,
+      remoteUrl: () => path.join(work, "missing.git"),
+      workDir: (repo) => path.join(work, "work", `broken-${repo.replace("/", "__")}`),
+    });
+    const err = await p
+      .pushRelease({
+        repo: "auscii/broken",
+        releaseDir: await release("broken", { "index.html": "x" }),
+        branch: "staging",
+        message: "x",
+      })
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/Opération git échouée/);
+    expect((err as Error).message).not.toContain("ghs_test");
+    expect((err as Error).message).not.toContain(
+      Buffer.from("x-access-token:ghs_test").toString("base64"),
+    );
   });
 
   it("refuses to work without credentials", async () => {
@@ -233,5 +366,92 @@ describe("GitHubProvider", () => {
       }),
     });
     await expect(p.createRepo("x")).rejects.toBeInstanceOf(GitHubError);
+  });
+});
+
+describe("git authentication", () => {
+  it("sends the token as a GitHub-scoped header, as actions/checkout does", () => {
+    const header = gitAuthHeader("ghs_abc");
+    expect(header).toBe(
+      `AUTHORIZATION: basic ${Buffer.from("x-access-token:ghs_abc").toString("base64")}`,
+    );
+    expect(gitAuthConfig("ghs_abc")).toBe(`http.https://github.com/.extraheader=${header}`);
+  });
+
+  it("accepts a private key pasted on one line with literal \\n", () => {
+    const oneLine = PEM.trim().replace(/\n/g, "\\n");
+    expect(normalizePem(`  ${oneLine}  `)).toBe(PEM.trim());
+    expect(() => appJwt("1", "not a key")).toThrow(/Clé privée GitHub illisible/);
+  });
+});
+
+describe("withRepoLock", () => {
+  it("runs operations on one directory one at a time", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "auscii-lock-"));
+    const events: string[] = [];
+    const op = (name: string) => async () => {
+      events.push(`${name}:start`);
+      await new Promise((r) => setTimeout(r, 20));
+      events.push(`${name}:end`);
+    };
+    await Promise.all([withRepoLock(dir, op("a")), withRepoLock(dir, op("b"))]);
+    expect(events).toEqual(["a:start", "a:end", "b:start", "b:end"]);
+    await expect(stat(`${dir}.lock`)).rejects.toThrow();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("waits for a lock held by another process, and takes over a dead one", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "auscii-lock-"));
+    await writeFile(
+      `${dir}.lock`,
+      JSON.stringify({ pid: 999_999_999, host: hostname(), at: Date.now() }),
+    );
+    expect(await withRepoLock(dir, async () => "ran", 1000)).toBe("ran");
+    await writeFile(
+      `${dir}.lock`,
+      JSON.stringify({ pid: 1, host: "other-container", at: Date.now() }),
+    );
+    await expect(withRepoLock(dir, async () => "ran", 300)).rejects.toThrow(/autre opération git/);
+    await rm(`${dir}.lock`, { force: true });
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("GitHubProvider.whoAmI", () => {
+  function whoAmI(installation: unknown) {
+    const { impl } = fakeFetch({
+      ...TOKEN_ROUTE,
+      "GET https://api.github.com/app/installations/42": () => ({
+        status: 200,
+        body: installation,
+      }),
+      "GET https://api.github.com/app": () => ({ status: 200, body: { name: "AUSCII Deploy" } }),
+      "GET https://api.github.com/installation/repositories": () => ({
+        status: 200,
+        body: { total_count: 3 },
+      }),
+    });
+    return new GitHubProvider(CREDS, { fetchImpl: impl }).whoAmI();
+  }
+  const GOOD = {
+    id: 42,
+    account: { login: "AUSCII", type: "Organization" },
+    permissions: { contents: "write", administration: "write", metadata: "read" },
+  };
+
+  it("checks the installation belongs to the configured organisation", async () => {
+    expect(await whoAmI(GOOD)).toEqual({ app: "AUSCII Deploy", org: "AUSCII", repos: 3 });
+    await expect(
+      whoAmI({ ...GOOD, account: { login: "someone-else", type: "Organization" } }),
+    ).rejects.toThrow(/appartient à « someone-else », pas à l'organisation « auscii »/);
+  });
+
+  it("refuses a personal account and missing permissions", async () => {
+    await expect(whoAmI({ ...GOOD, account: { login: "auscii", type: "User" } })).rejects.toThrow(
+      /compte GitHub personnel/,
+    );
+    await expect(
+      whoAmI({ ...GOOD, permissions: { contents: "read", administration: "write" } }),
+    ).rejects.toThrow(/Contents/);
   });
 });

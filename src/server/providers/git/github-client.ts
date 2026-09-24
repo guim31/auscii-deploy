@@ -1,8 +1,19 @@
 /** Minimal GitHub REST client. Tokens never appear in logs or messages. */
 
+import {
+  fetchWithRetry,
+  hasForbiddenHeaderChars,
+  NetworkError,
+  networkErrorReason,
+  readBody,
+  sanitizeMessage,
+  type FetchLike,
+  type RetryOptions,
+} from "../http-utils";
+
 export const GITHUB_API = "https://api.github.com";
 
-export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type { FetchLike };
 
 export class GitHubError extends Error {
   constructor(
@@ -41,6 +52,8 @@ export function describeGitHubError(
         .join(" ; ");
       return `GitHub a refusé la demande : ${detail || message}.`;
     }
+    case 429:
+      return "Limite d'API GitHub atteinte, réessayez dans quelques minutes.";
     default:
       return `Erreur GitHub (${status}) : ${message}.`;
   }
@@ -50,54 +63,46 @@ export class GitHubClient {
   constructor(
     private readonly fetchImpl: FetchLike = (input, init) => fetch(input, init),
     private readonly timeoutMs = 20_000,
+    private readonly retry: RetryOptions = {},
   ) {}
 
+  /** Performs a request and parses JSON. GETs are retried on 429/5xx. */
   async request<T>(
     method: string,
     path: string,
     opts: { token: string; tokenType?: "Bearer"; body?: unknown; expect?: number[] },
   ): Promise<{ status: number; data: T; headers: Headers }> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const token = opts.token.trim();
+    if (hasForbiddenHeaderChars(token))
+      throw new GitHubError("Jeton GitHub invalide (caractère interdit dans l'en-tête).", 0);
     let res: Response;
     try {
-      res = await this.fetchImpl(GITHUB_API + path, {
-        method,
-        headers: {
-          Authorization: `Bearer ${opts.token}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-          "User-Agent": "auscii-deploy",
-          ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      res = await fetchWithRetry(
+        this.fetchImpl,
+        GITHUB_API + path,
+        {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "auscii-deploy",
+            ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
+          },
+          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         },
-        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-        signal: controller.signal,
-      });
+        { timeoutMs: this.timeoutMs, secrets: [token], ...this.retry },
+      );
     } catch (err) {
-      const reason =
-        err instanceof Error && err.name === "AbortError"
-          ? "délai dépassé"
-          : err instanceof Error
-            ? err.message
-            : String(err);
+      const reason = err instanceof NetworkError ? err.reason : networkErrorReason(err, [token]);
       throw new GitHubError(`GitHub injoignable (${reason}).`, 0);
-    } finally {
-      clearTimeout(timer);
     }
-    const text = await res.text();
-    let data: unknown = null;
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
-    }
+    const data = await readBody(res);
     const accepted = opts.expect ?? [200, 201, 202, 204];
     if (!accepted.includes(res.status)) {
-      const body = typeof data === "object" ? (data as ErrorBody) : null;
+      const body = data && typeof data === "object" ? (data as ErrorBody) : null;
       throw new GitHubError(
-        describeGitHubError(res.status, body, `${method} ${path}`),
+        sanitizeMessage(describeGitHubError(res.status, body, `${method} ${path}`), [token]),
         res.status,
         data,
       );
