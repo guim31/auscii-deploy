@@ -65,7 +65,7 @@ docker compose run --rm --no-deps -T --entrypoint caddy caddy \
 	validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
 step "Démarrage sans Caddy (db, migrate, app, worker, backup)"
-docker compose up -d --pull never db migrate app worker backup
+docker compose up -d --pull missing db migrate app worker backup
 [ "$(docker inspect --format '{{.State.ExitCode}}' "$(docker compose ps -aq migrate)")" = 0 ] ||
 	fail "migrations"
 
@@ -146,7 +146,7 @@ step "Deuxième cycle sauvegarde / restauration"
 out=$(docker compose run --rm -T backup run)
 db_file=$(sed -n 's#^BACKUP_DB_FILE=/backups/daily/##p' <<<"$out")
 ./restore.sh --yes --no-restart "$db_file"
-docker compose up -d --pull never db migrate app worker backup
+docker compose up -d --pull missing db migrate app worker backup
 wait_app_healthy || fail "l'application n'est pas healthy après la deuxième restauration"
 worker_running || fail "le worker ne tourne pas après la deuxième restauration"
 
