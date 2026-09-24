@@ -39,47 +39,101 @@ const LEVEL: Record<ConsoleLog["level"], string> = {
   error: "text-red-300",
 };
 
-/** Live view of a deployment: step list plus streamed logs over SSE. */
+function isFinished(status: ConsoleState["status"]): status is "succeeded" | "failed" {
+  return status === "succeeded" || status === "failed";
+}
+
+function lastId(logs: ConsoleLog[]): number {
+  return logs.length ? logs[logs.length - 1].id : 0;
+}
+
+/**
+ * Live view of a deployment: step list plus streamed logs over SSE. When the
+ * parent passes a running state again for the same deployment (after
+ * "Réessayer" and a refresh), the console follows the new run.
+ */
 export function DeployConsole({
   deploymentId,
   initialState,
   initialLogs = [],
   onFinished,
+  onStatusChange,
   compact = false,
 }: {
   deploymentId: string;
   initialState: ConsoleState;
   initialLogs?: ConsoleLog[];
   onFinished?: (status: "succeeded" | "failed") => void;
+  /** Every status change, e.g. to disable buttons while the deployment runs. */
+  onStatusChange?: (status: ConsoleState["status"]) => void;
   compact?: boolean;
 }) {
   const [state, setState] = useState<ConsoleState>(initialState);
   const [logs, setLogs] = useState<ConsoleLog[]>(initialLogs);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  // Bumped when a finished deployment is started again: reconnects the stream.
+  const [generation, setGeneration] = useState(0);
+  const [seenInitial, setSeenInitial] = useState(initialState);
+  if (seenInitial !== initialState) {
+    setSeenInitial(initialState);
+    if (isFinished(state.status) && !isFinished(initialState.status)) {
+      setState(initialState);
+      setStreamError(null);
+      setGeneration((g) => g + 1);
+    }
+  }
+
   const bottomRef = useRef<HTMLDivElement>(null);
-  const finishedRef = useRef(false);
+  const statusRef = useRef(state.status);
+  const cursorRef = useRef(lastId(initialLogs));
+  const callbacks = useRef({ onFinished, onStatusChange });
+  useEffect(() => {
+    callbacks.current = { onFinished, onStatusChange };
+  });
 
   useEffect(() => {
-    if (initialState.status === "succeeded" || initialState.status === "failed") return;
-    const after = initialLogs.length ? initialLogs[initialLogs.length - 1].id : 0;
-    const es = new EventSource(`/api/deployments/${deploymentId}/stream?after=${after}`);
-    es.addEventListener("log", (e) =>
-      setLogs((prev) => [...prev, JSON.parse((e as MessageEvent).data) as ConsoleLog]),
+    statusRef.current = state.status;
+    callbacks.current.onStatusChange?.(state.status);
+  }, [state.status]);
+
+  useEffect(() => {
+    if (isFinished(statusRef.current)) return;
+    let finished = false;
+    const es = new EventSource(
+      `/api/deployments/${deploymentId}/stream?after=${cursorRef.current}`,
     );
+    es.addEventListener("log", (e) => {
+      const log = JSON.parse((e as MessageEvent).data) as ConsoleLog;
+      // The server resumes after Last-Event-ID; this guards against any replay.
+      if (log.id <= cursorRef.current) return;
+      cursorRef.current = log.id;
+      setLogs((prev) => [...prev, log]);
+    });
     es.addEventListener("state", (e) => {
       const next = JSON.parse((e as MessageEvent).data) as ConsoleState;
       setState(next);
-      if ((next.status === "succeeded" || next.status === "failed") && !finishedRef.current) {
-        finishedRef.current = true;
+      setStreamError(null);
+      if (isFinished(next.status) && !finished) {
+        finished = true;
         es.close();
-        onFinished?.(next.status);
+        callbacks.current.onFinished?.(next.status);
       }
     });
-    es.addEventListener("error", () => {
-      /* the browser reconnects; a closed finished stream is expected */
+    es.addEventListener("failure", (e) => {
+      const { message, final } = JSON.parse((e as MessageEvent).data) as {
+        message: string;
+        final: boolean;
+      };
+      setStreamError(message);
+      if (final) es.close();
     });
+    es.onerror = () => {
+      // CLOSED: the server refused the stream (session expired, unknown deployment).
+      if (es.readyState === EventSource.CLOSED && !finished)
+        setStreamError("Suivi interrompu. Rechargez la page pour reprendre.");
+    };
     return () => es.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deploymentId]);
+  }, [deploymentId, generation]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "nearest" });
@@ -129,7 +183,7 @@ export function DeployConsole({
                   : "en attente"}
           </span>
         </div>
-        <div className="max-h-80 flex-1 overflow-y-auto p-3">
+        <div className="max-h-80 flex-1 overflow-y-auto p-3" role="log" aria-live="polite">
           {logs.length === 0 && <div className="text-slate-500">En attente du worker…</div>}
           {logs.map((log) => (
             <div key={log.id} className={cn("whitespace-pre-wrap", LEVEL[log.level])}>
@@ -142,6 +196,9 @@ export function DeployConsole({
           ))}
           {state.error && state.status === "failed" && (
             <div className="mt-2 text-red-300">✖ {state.error}</div>
+          )}
+          {streamError && !isFinished(state.status) && (
+            <div className="mt-2 text-amber-300">{streamError}</div>
           )}
           <div ref={bottomRef} />
         </div>

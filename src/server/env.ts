@@ -16,6 +16,10 @@ const schema = z.object({
   PREVIEW_ORIGIN: z
     .string()
     .url()
+    .refine((v) => /^https?:\/\/[^/?#]+\/?$/i.test(v), {
+      message: "PREVIEW_ORIGIN must be a bare origin, e.g. https://apercu.auscii-preview.site",
+    })
+    .transform((v) => new URL(v).origin)
     .optional()
     .or(z.literal("").transform(() => undefined)),
   ADMIN_EMAIL: z.string().email().optional(),
@@ -47,6 +51,31 @@ export function productionIssues(v: Env): string[] {
     issues.push("BETTER_AUTH_SECRET: valeur d'exemple, générez-en une (openssl rand -hex 32).");
   if (v.APP_ENCRYPTION_KEY.toLowerCase() === PLACEHOLDER_ENCRYPTION_KEY)
     issues.push("APP_ENCRYPTION_KEY: valeur d'exemple, générez-en une (openssl rand -hex 32).");
+  issues.push(...previewOriginIssues(v));
+  return issues;
+}
+
+/** Last two labels of a host name: a rough registrable domain, enough for the pilot's domains. */
+function siteOf(hostname: string): string {
+  return hostname.toLowerCase().split(".").slice(-2).join(".");
+}
+
+/**
+ * The previews run the clients' JavaScript: their host must be served over
+ * https and must not share the tool's domain (cookies set on the parent domain
+ * would reach the tool).
+ */
+function previewOriginIssues(v: Env): string[] {
+  if (!v.PREVIEW_ORIGIN) return [];
+  const preview = new URL(v.PREVIEW_ORIGIN);
+  const app = new URL(v.APP_URL);
+  const issues: string[] = [];
+  if (preview.protocol !== "https:")
+    issues.push("PREVIEW_ORIGIN: l'hôte des aperçus doit être servi en https.");
+  if (siteOf(preview.hostname) === siteOf(app.hostname))
+    issues.push(
+      "PREVIEW_ORIGIN: utilisez un domaine distinct de celui de l'outil (par ex. apercu.auscii-preview.site).",
+    );
   return issues;
 }
 
