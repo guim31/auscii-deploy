@@ -20,10 +20,24 @@ export type RuntimeDeployInput = {
 export interface SiteRuntime {
   readonly kind: "static" | "docker";
   deploy(agent: ServerAgent, input: RuntimeDeployInput): Promise<void>;
+  /**
+   * Switches production back to a release still present on the server.
+   * Returns false when the release is gone (pruned): the caller then redeploys it.
+   */
   rollback(
     agent: ServerAgent,
     input: Pick<RuntimeDeployInput, "server" | "slug" | "releaseId" | "log">,
-  ): Promise<void>;
+  ): Promise<boolean>;
+  /**
+   * Deletes old releases of one environment on the server, keeping `keepReleaseIds`
+   * and whatever `current` points to. Returns the number of releases deleted.
+   */
+  prune(
+    agent: ServerAgent,
+    input: Pick<RuntimeDeployInput, "server" | "slug" | "environment" | "log"> & {
+      keepReleaseIds: string[];
+    },
+  ): Promise<number>;
 }
 
 export function releaseName(releaseId: string): string {
@@ -69,8 +83,17 @@ export const staticRuntime: SiteRuntime = {
 
   async rollback(agent, { server, slug, releaseId, log }) {
     const name = releaseName(releaseId);
+    if (!(await agent.hasRelease(server, slug, name))) return false;
     await log(`Retour à la release ${name}`);
     await agent.switchRelease(server, slug, name);
+    return true;
+  },
+
+  async prune(agent, { server, slug, environment, keepReleaseIds, log }) {
+    const dir = environment === "production" ? slug : `${slug}--preview`;
+    const removed = await agent.pruneReleases(server, dir, keepReleaseIds.map(releaseName));
+    if (removed.length > 0) await log(`${removed.length} ancienne(s) version(s) supprimée(s)`);
+    return removed.length;
   },
 };
 

@@ -8,6 +8,16 @@ const schema = z.object({
     .string()
     .regex(/^[0-9a-f]{64}$/i, "APP_ENCRYPTION_KEY must be 32 bytes in hex (openssl rand -hex 32)"),
   DATA_DIR: z.string().default("./data"),
+  /**
+   * Origin serving the release previews (e.g. https://apercu.auscii-preview.site).
+   * Must not share the tool's registrable domain. Empty in local development:
+   * previews are then served by the tool itself.
+   */
+  PREVIEW_ORIGIN: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_PASSWORD: z.string().optional(),
   DEMO_MODE: z

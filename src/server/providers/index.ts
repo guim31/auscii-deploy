@@ -56,12 +56,14 @@ export function getMockProviders(): Providers {
 }
 
 /**
- * Returns the provider set for the current mode. Demo mode (forced by
- * DEMO_MODE=true, or toggled in the UI) always returns mocks, so the whole
- * pipeline works without network access.
+ * Returns the provider set. Pass `demo` from the entity being processed
+ * (`site.isDemo`, `server.isDemo`): a job must never switch between mocks and
+ * real integrations because someone toggled the demo mode meanwhile. Without
+ * it, the current mode decides (forced by DEMO_MODE=true, or toggled in the UI).
  */
-export async function getProviders(): Promise<Providers> {
-  if (await isDemoMode()) return mocks;
+export async function getProviders(opts?: { demo?: boolean }): Promise<Providers> {
+  const demo = opts?.demo ?? (await isDemoMode());
+  if (demo) return mocks;
   const [gandi, scaleway, github, resend, anthropic, ssh] = await Promise.all([
     loadCredentials("gandi"),
     loadCredentials("scaleway"),

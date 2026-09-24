@@ -187,6 +187,14 @@ export class SshServerAgent implements ServerAgent {
     );
   }
 
+  async hasRelease(_server: ServerRef, _slug: string, _releaseName: string): Promise<boolean> {
+    throw new Error("hasRelease: not implemented yet");
+  }
+
+  async pruneReleases(_server: ServerRef, _slug: string, _keep: string[]): Promise<string[]> {
+    throw new Error("pruneReleases: not implemented yet");
+  }
+
   async switchRelease(server: ServerRef, slug: string, releaseName: string): Promise<void> {
     const dir = `${SITES_ROOT}/${assertSlug(slug)}`;
     const rel = `releases/${assertReleaseName(releaseName)}`;

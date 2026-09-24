@@ -4,6 +4,8 @@ import type {
   DomainOrder,
   DomainProvider,
   DnsRecord,
+  DnsRecordType,
+  OwnedDomain,
 } from "../types";
 import { hashInt, sleep } from "../mock-utils";
 
@@ -50,10 +52,18 @@ export class MockDomainProvider implements DomainProvider {
     return Promise.all(tlds.map((tld) => this.check(`${label}.${tld}`)));
   }
 
-  async register(fqdn: string, contact: DomainContact): Promise<DomainOrder> {
+  async register(
+    fqdn: string,
+    contact: DomainContact,
+    opts?: { expectedPrice?: number; currency?: string },
+  ): Promise<DomainOrder> {
     await sleep(1200);
     // The demo never depends on settings: any contact, even empty, is accepted.
     void contact;
+    const { tld } = splitFqdn(fqdn);
+    const price = PRICES[tld];
+    if (opts?.expectedPrice !== undefined && price !== undefined && price > opts.expectedPrice)
+      throw new Error(`Le prix a changé : ${price} € au lieu de ${opts.expectedPrice} € confirmés`);
     const orderId = `mock-order-${hashInt(fqdn, 100000)}`;
     orders.set(orderId, { fqdn, createdAt: Date.now() });
     return { orderId, status: "pending", message: "Commande enregistrée chez Gandi" };
@@ -72,6 +82,15 @@ export class MockDomainProvider implements DomainProvider {
     return { orderId, status: "registered", expiresAt };
   }
 
+  async getDomain(fqdn: string): Promise<OwnedDomain | null> {
+    await sleep(300);
+    const name = fqdn.toLowerCase();
+    if (!owned.has(name)) return null;
+    const expiresAt = new Date();
+    expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+    return { fqdn: name, status: "active", expiresAt, usesProviderDns: true };
+  }
+
   async listOwned(): Promise<string[]> {
     await sleep(300);
     return [...owned];
@@ -84,6 +103,21 @@ export class MockDomainProvider implements DomainProvider {
       (r) => !records.some((n) => n.name === r.name && n.type === r.type),
     );
     zones.set(zone, [...next, ...records]);
+  }
+
+  async deleteRecords(
+    zone: string,
+    name: string,
+    types: DnsRecordType[],
+  ): Promise<DnsRecordType[]> {
+    await sleep(300);
+    const current = zones.get(zone) ?? [];
+    const removed = current.filter((r) => r.name === name && types.includes(r.type));
+    zones.set(
+      zone,
+      current.filter((r) => !removed.includes(r)),
+    );
+    return removed.map((r) => r.type);
   }
 
   /** Test helper. */

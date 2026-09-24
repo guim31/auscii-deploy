@@ -4,6 +4,8 @@ import type {
   DomainOrder,
   DomainProvider,
   DnsRecord,
+  DnsRecordType,
+  OwnedDomain,
 } from "../types";
 import { ProviderNotConfiguredError } from "../types";
 import { GandiClient, GandiError, type FetchLike } from "./gandi-client";
@@ -242,6 +244,18 @@ export class GandiProvider implements DomainProvider {
       if (err instanceof GandiError && err.status === 404) return null;
       throw err;
     }
+  }
+
+  async getDomain(_fqdn: string): Promise<OwnedDomain | null> {
+    throw new Error("getDomain: not implemented yet");
+  }
+
+  async deleteRecords(
+    _zone: string,
+    _name: string,
+    _types: DnsRecordType[],
+  ): Promise<DnsRecordType[]> {
+    throw new Error("deleteRecords: not implemented yet");
   }
 
   async listOwned(): Promise<string[]> {

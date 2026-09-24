@@ -180,6 +180,10 @@ export class ScalewayProvider implements CloudProvider {
     };
   }
 
+  async findServerByName(_name: string, _zone: string): Promise<CloudServer | null> {
+    throw new Error("findServerByName: not implemented yet");
+  }
+
   async getServer(providerId: string, zone: string): Promise<CloudServer> {
     const { data } = await this.api().request<ServerResponse>(
       "GET",
