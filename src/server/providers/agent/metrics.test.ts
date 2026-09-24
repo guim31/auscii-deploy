@@ -29,4 +29,23 @@ describe("parseMetrics", () => {
   it("rejects garbage", () => {
     expect(() => parseMetrics("bash: nproc: command not found", 2)).toThrow(/illisibles/);
   });
+
+  it("never returns NaN when a value is missing", () => {
+    const m = parseMetrics("NPROC\nLOAD\nMEM 2000\nDISK 100 40\nSITES", 2);
+    for (const v of Object.values(m))
+      if (typeof v === "number") expect(Number.isNaN(v)).toBe(false);
+    expect(m.vcpus).toBe(2);
+    expect(m.load15).toBe(0);
+    expect(m.ramUsedPct).toBe(0);
+    expect(m.diskUsedPct).toBe(60);
+    expect(m.sitesCount).toBe(0);
+  });
+
+  it("clamps inconsistent values", () => {
+    const m = parseMetrics("MEM 100 150\nDISK 100 50", 1);
+    expect(m.ramUsedPct).toBe(0);
+    expect(() => parseMetrics("MEM 100 50\nDISK 100 -5", 1)).toThrow(/illisibles/);
+    expect(() => parseMetrics("MEM 100 50\nDISK 100", 1)).toThrow(/illisibles/);
+    expect(parseMetrics("MEM 100 50\nDISK 100 150", 1).diskFreeBytes).toBe(100);
+  });
 });

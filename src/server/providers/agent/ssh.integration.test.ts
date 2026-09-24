@@ -54,6 +54,7 @@ describe.skipIf(!enabled)("SshServerAgent against a real server", () => {
     await agent.waitReady(server, 30_000);
     await agent.ensureSiteDirs(server, slug);
     await agent.uploadRelease(server, slug, dir, "rel-1");
+    expect(await agent.hasRelease(server, slug, "rel-1")).toBe(true);
     await agent.switchRelease(server, slug, "rel-1");
     const current = await agent.exec(
       server,
@@ -61,10 +62,27 @@ describe.skipIf(!enabled)("SshServerAgent against a real server", () => {
     );
     expect(current.stdout).toContain("releases/rel-1");
     expect(current.stdout).toContain("selftest");
+
+    // Releases are immutable: a second upload of the live one changes nothing.
+    await writeFile(path.join(dir, "index.html"), "<h1>changed</h1>");
+    await agent.uploadRelease(server, slug, dir, "rel-1");
+    const still = await agent.exec(server, `cat /srv/sites/${slug}/current/index.html`);
+    expect(still.stdout).toContain("selftest");
+
+    await agent.uploadRelease(server, slug, dir, "rel-2");
+    await agent.uploadRelease(server, slug, dir, "rel-3");
+    expect(await agent.pruneReleases(server, slug, ["rel-2"])).toEqual(["rel-3"]);
+    expect(await agent.hasRelease(server, slug, "rel-1")).toBe(true);
+    expect(await agent.hasRelease(server, slug, "rel-3")).toBe(false);
+
     await agent.writeCaddySite(
       server,
       slug,
-      productionCaddyBlock({ slug, hosts: ["selftest.invalid"], pilotHost: "deploy.invalid" }),
+      productionCaddyBlock({
+        siteSlug: slug,
+        hosts: ["selftest.invalid"],
+        pilotHost: "deploy.invalid",
+      }),
     );
     await agent.reloadCaddy(server);
     const metrics = await agent.collectMetrics(server);
@@ -72,5 +90,8 @@ describe.skipIf(!enabled)("SshServerAgent against a real server", () => {
     await expect(agent.writeCaddySite(server, slug, "this is { not caddy")).rejects.toThrow(
       /refusée/,
     );
+    // The working block is still in place.
+    const block = await agent.exec(server, `cat /etc/caddy/sites/${slug}.caddy`);
+    expect(block.stdout).toContain("selftest.invalid");
   });
 });
