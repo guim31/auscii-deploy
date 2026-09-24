@@ -1,35 +1,93 @@
 # auscii-deploy — frontal du pilote. HTTPS automatique (Let's Encrypt).
+#
+# Deux noms, sur deux domaines enregistrables différents :
+#   {$PILOT_HOST}        l'outil (ex. deploy.auscii.site) ;
+#   {$PREVIEW_APP_HOST}  les aperçus des versions (ex. apercu.auscii-preview.site).
+# Le contenu d'un zip client n'est jamais servi depuis l'origine de l'outil.
 {
 	email {$ACME_EMAIL}
+}
+
+(security_headers) {
+	Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	X-Content-Type-Options "nosniff"
+	Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	-Server
+}
+
+(access_log) {
+	log {
+		output stdout
+		format console
+	}
 }
 
 {$PILOT_HOST} {
 	encode gzip zstd
 
-	# Les archives de sites montent à 50 Mo, on laisse de la marge.
-	request_body {
-		max_size 60MB
-	}
-
 	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		X-Content-Type-Options "nosniff"
+		import security_headers
 		Referrer-Policy "strict-origin-when-cross-origin"
 		X-Frame-Options "SAMEORIGIN"
-		Permissions-Policy "camera=(), microphone=(), geolocation=()"
-		-Server
 	}
 
-	reverse_proxy app:3000 {
-		# Le relais des formulaires des sites clients arrive ici avec X-Site.
-		header_up X-Forwarded-Proto {scheme}
-		health_uri /api/health
-		health_interval 30s
-		health_timeout 5s
+	# Les aperçus n'existent que sur leur origine dédiée.
+	handle /apercu/* {
+		respond 404
 	}
 
-	log {
-		output stdout
-		format console
+	# Relais des formulaires des sites clients : les serveurs de sites réécrivent
+	# /__forms/* en /api/forms et ajoutent X-Auscii-Relay, X-Auscii-Client-Ip et
+	# X-Auscii-Site-Host. Un message de contact n'a pas besoin de plus de 64 Ko.
+	@forms path /api/forms /api/forms/*
+	handle @forms {
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy app:3000
 	}
+
+	handle {
+		# Les archives de sites montent à 50 Mo, on laisse de la marge.
+		request_body {
+			max_size 60MB
+		}
+		reverse_proxy app:3000 {
+			# L'image est construite sans connaître l'origine des aperçus : la
+			# politique de l'application se termine par frame-src 'self', on y
+			# ajoute cette origine ici (voir next.config.ts).
+			header_down Content-Security-Policy "frame-src 'self'" "frame-src 'self' https://{$PREVIEW_APP_HOST}"
+			health_uri /api/health
+			health_interval 30s
+			health_timeout 5s
+		}
+	}
+
+	import access_log
+}
+
+# Aperçus des versions déposées (étape 3), affichés dans une iframe de l'outil.
+# Seul /apercu/* est relayé ; l'application pose sa propre CSP, dont
+# frame-ancestors, et vérifie l'URL signée.
+{$PREVIEW_APP_HOST} {
+	encode gzip zstd
+
+	header {
+		import security_headers
+		Referrer-Policy "no-referrer"
+	}
+
+	request_body {
+		max_size 64KB
+	}
+
+	handle /apercu/* {
+		reverse_proxy app:3000
+	}
+
+	handle {
+		respond 404
+	}
+
+	import access_log
 }

@@ -1,5 +1,6 @@
 .git
 .github
+.claude
 node_modules
 .next
 out
@@ -10,7 +11,9 @@ playwright-report
 docs
 e2e
 infra
+!infra/pilot/backup.sh
 *.md
+*.tsbuildinfo
 .env
 .env.*
 !.env.example
