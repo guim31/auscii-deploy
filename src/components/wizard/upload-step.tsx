@@ -33,9 +33,21 @@ export type ReleaseView = {
   createdAt: string;
   sizeBytes: number;
   fileCount: number;
+  /** Without page texts (analysisForClient). */
   analysis: Analysis | null;
   aiReport: AiReport | null;
+  /** Signed preview URL, computed on the server (previewUrl). */
+  previewUrl: string;
 };
+
+/** Same limit as the server (MAX_ZIP_BYTES), checked before sending. */
+const MAX_ZIP_MB = 50;
+/** The report usually takes well under a minute; past this, offer to start it again. */
+const AI_REPORT_WAIT_MS = 3 * 60_000;
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n > 1 ? many : one}`;
+}
 
 function IssueIcon({ level }: { level: "error" | "warn" | "info" | "ok" }) {
   if (level === "error") return <XCircleIcon className="text-destructive size-4 shrink-0" />;
@@ -82,18 +94,23 @@ export function UploadStep({
   const [previewKey, setPreviewKey] = useState(0);
   // AI reports fetched after the initial render, keyed by release id.
   const [fetchedReports, setFetchedReports] = useState<Record<string, AiReport>>({});
+  // Releases whose report did not arrive in time: polling stopped, "Relancer" shown.
+  const [reportTimedOut, setReportTimedOut] = useState<Record<string, boolean>>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const aiReport = current ? (current.aiReport ?? fetchedReports[current.id] ?? null) : null;
+  const waitingReport = Boolean(current && !aiReport && !reportTimedOut[current.id]);
 
   useEffect(() => {
-    if (!current || current.aiReport || fetchedReports[current.id]) return;
+    if (!current || !waitingReport) return;
     const releaseId = current.id;
+    const deadline = Date.now() + AI_REPORT_WAIT_MS;
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      const report = await getAiReportAction(releaseId);
+      const report = await getAiReportAction(releaseId).catch(() => null);
       if (stop) return;
       if (report) setFetchedReports((prev) => ({ ...prev, [releaseId]: report }));
+      else if (Date.now() > deadline) setReportTimedOut((prev) => ({ ...prev, [releaseId]: true }));
       else timer = setTimeout(poll, 2500);
     };
     timer = setTimeout(poll, 1500);
@@ -101,26 +118,35 @@ export function UploadStep({
       stop = true;
       clearTimeout(timer);
     };
-  }, [current, fetchedReports]);
+  }, [current, waitingReport]);
 
   const upload = useCallback(
     (file: File) => {
+      if (uploading) return;
       if (!/\.zip$/i.test(file.name)) {
         toast.error("Déposez une archive .zip");
         return;
       }
+      if (file.size > MAX_ZIP_MB * 1024 ** 2) {
+        toast.error(`Archive trop volumineuse (maximum ${MAX_ZIP_MB} Mo).`);
+        return;
+      }
       setUploading(true);
       setProgress(0);
-      const form = new FormData();
-      form.append("file", file);
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `/api/sites/${siteId}/upload`);
+      xhr.setRequestHeader("Content-Type", "application/zip");
       xhr.upload.onprogress = (e) =>
         e.lengthComputable && setProgress(Math.round((e.loaded / e.total) * 100));
       xhr.onload = () => {
         setUploading(false);
-        let body: { error?: string; releaseId?: string; version?: number; analysis?: Analysis } =
-          {};
+        let body: {
+          error?: string;
+          releaseId?: string;
+          version?: number;
+          analysis?: Analysis;
+          previewUrl?: string;
+        } = {};
         try {
           body = JSON.parse(xhr.responseText);
         } catch {
@@ -139,19 +165,21 @@ export function UploadStep({
           fileCount: body.analysis?.fileCount ?? 0,
           analysis: body.analysis ?? null,
           aiReport: null,
+          previewUrl: body.previewUrl ?? "",
         });
       };
       xhr.onerror = () => {
         setUploading(false);
-        toast.error("Échec de l'envoi");
+        toast.error("Échec de l'envoi, vérifiez la connexion et réessayez.");
       };
-      xhr.send(form);
+      xhr.send(file);
     },
-    [siteId],
+    [siteId, uploading],
   );
 
   const analysis = current?.analysis ?? null;
-  const unwiredForms = analysis?.forms.filter((f) => !f.wired).length ?? 0;
+  const unwiredForms =
+    analysis?.forms.filter((f) => (f.kind ?? "contact") === "contact" && !f.wired).length ?? 0;
 
   async function retryReport() {
     if (!current) return;
@@ -165,6 +193,7 @@ export function UploadStep({
       delete next[current.id];
       return next;
     });
+    setReportTimedOut((prev) => ({ ...prev, [current.id]: false }));
     setCurrent({ ...current, aiReport: null });
   }
 
@@ -174,7 +203,11 @@ export function UploadStep({
     const res = await fixFormsAction(current.id);
     setFixing(false);
     if (!res.ok) return void toast.error(res.error);
-    toast.success(`${res.fixed} formulaire(s) corrigé(s)`);
+    toast.success(
+      res.fixed > 0
+        ? `${plural(res.fixed, "formulaire corrigé", "formulaires corrigés")}`
+        : "Aucun formulaire à corriger",
+    );
     setCurrent({ ...current, analysis: res.analysis });
     setPreviewKey((k) => k + 1);
   }
@@ -192,23 +225,33 @@ export function UploadStep({
         <CardContent>
           <div
             role="button"
-            tabIndex={0}
-            onClick={() => inputRef.current?.click()}
-            onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
+            tabIndex={uploading ? -1 : 0}
+            aria-disabled={uploading}
+            aria-describedby="dropzone-help"
+            onClick={() => !uploading && inputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (uploading || (e.key !== "Enter" && e.key !== " ")) return;
+              e.preventDefault();
+              inputRef.current?.click();
+            }}
             onDragOver={(e) => {
               e.preventDefault();
-              setDragging(true);
+              if (!uploading) setDragging(true);
             }}
             onDragLeave={() => setDragging(false)}
             onDrop={(e) => {
               e.preventDefault();
               setDragging(false);
               const file = e.dataTransfer.files[0];
-              if (file) upload(file);
+              if (file && !uploading) upload(file);
             }}
             className={cn(
-              "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-10 text-center transition-colors",
-              dragging ? "border-primary bg-accent" : "hover:bg-muted/50",
+              "flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-10 text-center transition-colors",
+              uploading
+                ? "cursor-progress opacity-70"
+                : dragging
+                  ? "border-primary bg-accent cursor-pointer"
+                  : "hover:bg-muted/50 cursor-pointer",
             )}
             data-testid="dropzone"
           >
@@ -218,18 +261,28 @@ export function UploadStep({
               accept=".zip,application/zip"
               className="hidden"
               data-testid="zip-input"
-              onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
+              disabled={uploading}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                // Reset so that choosing the same file again triggers a new upload.
+                e.target.value = "";
+                if (file) upload(file);
+              }}
             />
             {uploading ? (
               <Loader2Icon className="text-primary size-8 animate-spin" />
             ) : (
               <UploadCloudIcon className="text-muted-foreground size-8" />
             )}
-            <div className="font-medium">
-              {uploading ? `Envoi… ${progress} %` : "Glissez le .zip ici, ou cliquez pour choisir"}
+            <div className="font-medium" aria-live="polite">
+              {uploading
+                ? progress < 100
+                  ? `Envoi… ${progress} %`
+                  : "Vérification de l'archive…"
+                : "Glissez le .zip ici, ou cliquez pour choisir"}
             </div>
-            <div className="text-muted-foreground text-xs">
-              index.html à la racine, ou dans un dossier unique
+            <div id="dropzone-help" className="text-muted-foreground text-xs">
+              Le dossier qui contient index.html, compressé en .zip ({MAX_ZIP_MB} Mo maximum)
             </div>
           </div>
         </CardContent>
@@ -247,8 +300,10 @@ export function UploadStep({
                   </Badge>
                 </CardTitle>
                 <CardDescription>
-                  {analysis.fileCount} fichiers · {formatBytes(analysis.sizeBytes)} ·{" "}
-                  {analysis.pages.length} page(s) HTML · reçue {formatDateTime(current.createdAt)}
+                  {plural(analysis.fileCount, "fichier", "fichiers")} ·{" "}
+                  {formatBytes(analysis.sizeBytes)} ·{" "}
+                  {plural(analysis.pages.length, "page", "pages")} · reçue{" "}
+                  {formatDateTime(current.createdAt)}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -280,7 +335,7 @@ export function UploadStep({
                 )}
                 {analysis.brokenLinks.length > 0 && (
                   <details className="text-muted-foreground mt-3 text-xs">
-                    <summary className="cursor-pointer">Liens cassés</summary>
+                    <summary className="cursor-pointer">Voir les liens cassés</summary>
                     <ul className="mt-1 list-disc pl-5">
                       {analysis.brokenLinks.slice(0, 20).map((b, i) => (
                         <li key={i}>
@@ -301,7 +356,9 @@ export function UploadStep({
                 <CardDescription>
                   {aiReport
                     ? aiReport.generatedBy
-                    : "Analyse en cours, vous pouvez continuer sans attendre."}
+                    : waitingReport
+                      ? "Analyse en cours, vous pouvez continuer sans attendre."
+                      : "Le rapport n'est pas arrivé. Vous pouvez le relancer, ou continuer sans."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
@@ -325,10 +382,25 @@ export function UploadStep({
                       </Button>
                     )}
                   </>
-                ) : (
-                  <div className="text-muted-foreground flex items-center gap-2 text-sm">
+                ) : waitingReport ? (
+                  <div
+                    className="text-muted-foreground flex items-center gap-2 text-sm"
+                    role="status"
+                  >
                     <Loader2Icon className="size-4 animate-spin" /> Lecture des pages…
                   </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="self-start"
+                    onClick={retryReport}
+                    disabled={retrying}
+                    data-testid="retry-ai-report"
+                  >
+                    {retrying ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}{" "}
+                    Relancer l'analyse
+                  </Button>
                 )}
               </CardContent>
             </Card>
@@ -337,23 +409,32 @@ export function UploadStep({
           <Card className="gap-0 overflow-hidden py-0">
             <div className="flex items-center justify-between border-b px-4 py-2 text-sm">
               <span className="font-medium">Prévisualisation</span>
-              <a
-                href={`/api/preview/${current.id}/`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary text-xs hover:underline"
-              >
-                Ouvrir dans un onglet
-              </a>
+              {current.previewUrl && (
+                <a
+                  href={current.previewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary text-xs hover:underline"
+                >
+                  Ouvrir dans un onglet
+                </a>
+              )}
             </div>
-            <iframe
-              key={previewKey}
-              src={`/api/preview/${current.id}/`}
-              title="Prévisualisation du site"
-              className="h-[560px] w-full bg-white"
-              sandbox="allow-scripts allow-forms"
-              data-testid="preview-frame"
-            />
+            {current.previewUrl ? (
+              <iframe
+                key={previewKey}
+                src={current.previewUrl}
+                title="Prévisualisation du site"
+                className="h-[560px] w-full bg-white"
+                sandbox="allow-scripts allow-forms allow-popups allow-modals"
+                referrerPolicy="no-referrer"
+                data-testid="preview-frame"
+              />
+            ) : (
+              <div className="text-muted-foreground flex h-[560px] items-center justify-center p-6 text-sm">
+                Rechargez la page pour afficher la prévisualisation.
+              </div>
+            )}
           </Card>
         </div>
       )}

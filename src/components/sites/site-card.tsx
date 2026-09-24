@@ -39,12 +39,19 @@ export type SiteCardData = {
   liveReleaseId: string | null;
   stagingReleaseId: string | null;
   demo: boolean;
+  /**
+   * Signed preview URL of the live (else staging) release, from previewUrl()
+   * on the server. Without it the card goes through /api/preview/<id>/, which
+   * checks the session and redirects to the same signed URL.
+   */
+  previewUrl?: string | null;
 };
 
 export function SiteCard({ site }: { site: SiteCardData }) {
   const [open, setOpen] = useState(false);
   const previewReleaseId = site.liveReleaseId ?? site.stagingReleaseId;
-  const previewSrc = previewReleaseId ? `/api/preview/${previewReleaseId}/` : null;
+  const previewSrc =
+    site.previewUrl ?? (previewReleaseId ? `/api/preview/${previewReleaseId}/` : null);
   const liveUrl = site.domain ? `https://${site.domain}` : null;
   const days = daysUntil(site.ssl?.expiresAt);
   const domainDays = daysUntil(site.domainExpiresAt);
@@ -163,7 +170,8 @@ export function SiteCard({ site }: { site: SiteCardData }) {
               src={previewSrc}
               title={`Aperçu de ${site.clientName}`}
               className="size-full flex-1 rounded-b-xl bg-white"
-              sandbox="allow-scripts allow-forms"
+              sandbox="allow-scripts allow-forms allow-popups allow-modals"
+              referrerPolicy="no-referrer"
             />
           )}
         </DialogContent>
