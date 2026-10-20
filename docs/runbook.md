@@ -18,7 +18,7 @@ Ce document décrit l'installation, l'exploitation et la reprise du pilote, puis
 
 ## Pilote (hébergement de l'outil)
 
-- Un VPS Scaleway dédié, Debian 12, 2 vCPU / 4 Go et 40 Go de disque recommandés (les archives des sites s'accumulent, voir « Sauvegardes »).
+- Un VPS Scaleway dédié, Debian 12 : un `DEV1-M` (3 vCPU, 4 Go, 40 Go de disque ; 14,74 € HT/mois plus ≈ 2,92 € pour l'IPv4, prix relevés en septembre 2026). Pas moins de 4 Go ni de 40 Go : les archives des sites s'accumulent, voir « Sauvegardes ».
 - Pile Docker Compose dans `infra/pilot/`, installée dans `/opt/auscii-deploy` :
   - `db` : PostgreSQL 16 (image figée `postgres:16.15-alpine`) ;
   - `migrate` : applique les migrations Prisma et s'arrête ;
